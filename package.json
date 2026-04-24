@@ -1,0 +1,11 @@
+{
+  "name": "skylanders-arena-prototype",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node ./scripts/check.mjs"
+  },
+  "dependencies": {
+    "three": "^0.184.0"
+  }
+}
