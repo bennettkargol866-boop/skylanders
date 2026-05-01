@@ -19,6 +19,13 @@ export function normalizeVector(x, z) {
   return { x: x / length, z: z / length };
 }
 
+function rotateVector(vector, degrees) {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return normalizeVector(vector.x * cos - vector.z * sin, vector.x * sin + vector.z * cos);
+}
+
 export function distanceBetween(a, b) {
   return Math.hypot(a.x - b.x, a.z - b.z);
 }
@@ -86,7 +93,7 @@ export class AttackPulse {
 }
 
 export class Projectile {
-  constructor({ x, z, direction, speed, radius, damage, distance, color, source }) {
+  constructor({ x, z, direction, speed, radius, damage, distance, color, source, pierce = 0 }) {
     this.id = makeId("projectile");
     this.x = x;
     this.z = z;
@@ -98,6 +105,8 @@ export class Projectile {
     this.distanceTravelled = 0;
     this.color = color;
     this.source = source;
+    this.pierce = pierce;
+    this.hitTargets = new Set();
     this.alive = true;
   }
 
@@ -110,6 +119,14 @@ export class Projectile {
     if (this.distanceTravelled >= this.maxDistance) {
       this.alive = false;
     }
+  }
+
+  markHit(targetId) {
+    this.hitTargets.add(targetId);
+  }
+
+  hasHit(targetId) {
+    return this.hitTargets.has(targetId);
   }
 }
 
@@ -164,21 +181,14 @@ export class Player {
   }
 
   update(dt, input, game, aimDirection = null) {
-    let moveX = 0;
-    let moveZ = 0;
-
-    if (input.left) {
-      moveX -= 1;
-    }
-    if (input.right) {
-      moveX += 1;
-    }
-    if (input.up) {
-      moveZ -= 1;
-    }
-    if (input.down) {
-      moveZ += 1;
-    }
+    const moveForward = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+    const moveStrafe = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+    const movementBasis = game.getMovementBasis?.() ?? {
+      forward: { x: 0, z: -1 },
+      right: { x: 1, z: 0 },
+    };
+    const moveX = movementBasis.right.x * moveStrafe + movementBasis.forward.x * moveForward;
+    const moveZ = movementBasis.right.z * moveStrafe + movementBasis.forward.z * moveForward;
 
     const direction = normalizeVector(moveX, moveZ);
     const hasInput = direction.x || direction.z;
@@ -254,20 +264,61 @@ export class Player {
 
     this.lastBasicUsed = time;
     this.attackAnimUntil = time + this.attackAnimDuration;
-    game.spawnPulse({
-      x: this.x + this.facing.x * this.basicAttack.range,
-      z: this.z + this.facing.z * this.basicAttack.range,
-      radius: this.basicAttack.radius,
-      damage: this.basicAttack.damage,
-      lifetime: this.attackAnimDuration,
-      color: this.basicAttack.color,
-      source: "player",
-      direction: { ...this.facing },
-      arcDegrees: this.basicAttack.arcDegrees ?? 360,
-      originX: this.x,
-      originZ: this.z,
-      maxReach: this.basicAttack.range + this.basicAttack.radius,
-    });
+
+    const spawnArc = ({ direction = this.facing, range = this.basicAttack.range, radius = this.basicAttack.radius, arcDegrees = this.basicAttack.arcDegrees, damage = this.basicAttack.damage } = {}) => {
+      game.spawnPulse({
+        x: this.x + direction.x * range,
+        z: this.z + direction.z * range,
+        radius,
+        damage,
+        lifetime: this.attackAnimDuration,
+        color: this.basicAttack.color,
+        source: "player",
+        direction: { ...direction },
+        arcDegrees: arcDegrees ?? 360,
+        originX: this.x,
+        originZ: this.z,
+        maxReach: range + radius,
+      });
+    };
+
+    if (this.basicAttack.pattern === "spin") {
+      game.spawnPulse({
+        x: this.x,
+        z: this.z,
+        radius: this.basicAttack.radius + this.basicAttack.range * 0.45,
+        damage: this.basicAttack.damage,
+        lifetime: this.attackAnimDuration,
+        color: this.basicAttack.color,
+        source: "player",
+        direction: null,
+        arcDegrees: 360,
+        originX: this.x,
+        originZ: this.z,
+        maxReach: this.basicAttack.radius + this.basicAttack.range * 0.45,
+      });
+      return true;
+    }
+
+    if (this.basicAttack.pattern === "double") {
+      const spread = this.basicAttack.spreadDegrees ?? 34;
+      const damage = Math.ceil(this.basicAttack.damage * 0.68);
+      spawnArc({ direction: rotateVector(this.facing, -spread / 2), damage });
+      spawnArc({ direction: rotateVector(this.facing, spread / 2), damage });
+      return true;
+    }
+
+    if (this.basicAttack.pattern === "stab") {
+      spawnArc({
+        range: this.basicAttack.range + 0.65,
+        radius: this.basicAttack.radius * 0.72,
+        arcDegrees: this.basicAttack.arcDegrees ?? 42,
+        damage: this.basicAttack.damage + 2,
+      });
+      return true;
+    }
+
+    spawnArc();
     return true;
   }
 
@@ -280,35 +331,69 @@ export class Player {
     this.specialAnimUntil = time + this.specialAnimDuration;
 
     if (this.special.type === "projectile") {
-      game.spawnProjectile({
-        x: this.x + this.facing.x * 1.8,
-        z: this.z + this.facing.z * 1.8,
-        direction: { ...this.facing },
-        speed: this.special.speed,
-        radius: this.special.radius,
-        damage: this.special.damage,
-        distance: this.special.distance,
-        color: this.special.color,
-        source: "player",
-      });
+      const count = this.special.count ?? 1;
+      const spread = this.special.spreadDegrees ?? 0;
+      const startAngle = count > 1 ? -spread / 2 : 0;
+      const step = count > 1 ? spread / (count - 1) : 0;
+
+      for (let index = 0; index < count; index += 1) {
+        const direction = rotateVector(this.facing, startAngle + step * index);
+        game.spawnProjectile({
+          x: this.x + direction.x * 1.8,
+          z: this.z + direction.z * 1.8,
+          direction,
+          speed: this.special.speed,
+          radius: this.special.radius,
+          damage: this.special.damage,
+          distance: this.special.distance,
+          color: this.special.color,
+          source: "player",
+          pierce: this.special.pierce ?? 0,
+        });
+      }
+      return true;
+    }
+
+    if (this.special.type === "burst") {
+      const count = this.special.count ?? 8;
+      for (let index = 0; index < count; index += 1) {
+        const angle = (360 * index) / count;
+        const direction = rotateVector(this.facing, angle);
+        game.spawnProjectile({
+          x: this.x + direction.x * 1.6,
+          z: this.z + direction.z * 1.6,
+          direction,
+          speed: this.special.speed,
+          radius: this.special.radius,
+          damage: this.special.damage,
+          distance: this.special.distance,
+          color: this.special.color,
+          source: "player",
+          pierce: this.special.pierce ?? 0,
+        });
+      }
       return true;
     }
 
     if (this.special.type === "slam") {
-      game.spawnPulse({
-        x: this.x,
-        z: this.z,
-        radius: this.special.radius,
-        damage: this.special.damage,
-        lifetime: 0.24,
-        color: this.special.color,
-        source: "player",
-        direction: { ...this.facing },
-        arcDegrees: 360,
-        originX: this.x,
-        originZ: this.z,
-        maxReach: this.special.radius,
-      });
+      const rings = this.special.rings ?? 1;
+      for (let index = 0; index < rings; index += 1) {
+        const scale = 1 + index * 0.36;
+        game.spawnPulse({
+          x: this.x,
+          z: this.z,
+          radius: this.special.radius * scale,
+          damage: Math.ceil(this.special.damage * (index === 0 ? 1 : 0.58)),
+          lifetime: 0.24 + index * 0.08,
+          color: this.special.color,
+          source: "player",
+          direction: { ...this.facing },
+          arcDegrees: 360,
+          originX: this.x,
+          originZ: this.z,
+          maxReach: this.special.radius * scale,
+        });
+      }
       return true;
     }
 
@@ -347,11 +432,25 @@ export class Player {
 }
 
 export class Enemy {
-  constructor({ x, z, health, speed, damage, attackRange, aggroRange, side }) {
+  constructor({
+    x,
+    z,
+    health,
+    speed,
+    damage,
+    attackRange,
+    aggroRange,
+    side,
+    radius = 1,
+    boss = false,
+    attackCooldown = 1,
+    windupDuration = 0.2,
+    slamRadius = 0,
+  }) {
     this.id = makeId("enemy");
     this.x = x;
     this.z = z;
-    this.radius = 1;
+    this.radius = radius;
     this.health = health;
     this.maxHealth = health;
     this.speed = speed;
@@ -359,11 +458,19 @@ export class Enemy {
     this.attackRange = attackRange;
     this.aggroRange = aggroRange;
     this.side = side;
+    this.boss = boss;
     this.facing = { x: -1, z: 0 };
-    this.attackCooldown = 1;
+    this.attackCooldown = attackCooldown;
+    this.windupDuration = windupDuration;
+    this.slamRadius = slamRadius || attackRange;
     this.lastAttackAt = -Infinity;
     this.hitFlashUntil = 0;
     this.attackAnimUntil = 0;
+    this.telegraphX = x;
+    this.telegraphZ = z;
+    this.telegraphStartedAt = -Infinity;
+    this.telegraphUntil = -Infinity;
+    this.pendingSlam = false;
   }
 
   update(dt, player, game, time) {
@@ -379,6 +486,29 @@ export class Enemy {
 
     if (distance > this.attackRange + this.radius + player.radius) {
       game.moveEnemy(this, direction.x * this.speed * dt, direction.z * this.speed * dt);
+      return;
+    }
+
+    if (this.boss) {
+      if (this.pendingSlam) {
+        if (time >= this.telegraphUntil) {
+          this.pendingSlam = false;
+          this.attackAnimUntil = time + 0.34;
+          if (distanceBetween(player, { x: this.telegraphX, z: this.telegraphZ }) <= this.slamRadius + player.radius) {
+            player.takeDamage(this.damage, time);
+          }
+        }
+        return;
+      }
+
+      if (time >= this.lastAttackAt + this.attackCooldown) {
+        this.lastAttackAt = time;
+        this.pendingSlam = true;
+        this.telegraphX = player.x;
+        this.telegraphZ = player.z;
+        this.telegraphStartedAt = time;
+        this.telegraphUntil = time + this.windupDuration;
+      }
       return;
     }
 

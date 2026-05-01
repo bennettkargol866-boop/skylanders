@@ -3,7 +3,8 @@
 A small browser prototype focused on a 3D Skylanders-inspired loop:
 
 - Pick a chunky fantasy hero
-- Spawn into a larger floating-island level
+- Choose from a growing roster of heroes
+- Spawn into one of five handcrafted floating-island realms
 - Clear the front half and find the key
 - Bring the key to the gate to unlock the back half
 - Collect coin drops from defeated enemies
@@ -33,6 +34,7 @@ Then open `http://localhost:8000`.
 - Enemies drop coins when defeated
 - Coins are saved locally in the browser
 - New heroes unlock from the character-select overlay
+- Each hero gains a level-up reward after every cleared realm
 - Progress auto-saves between sessions
 
 ## Project Structure

@@ -3,7 +3,85 @@ export const VIEWPORT = Object.freeze({
   height: 720,
 });
 
-export const TOTAL_AREAS = 100;
+function point(x, z) {
+  return Object.freeze({ x, z });
+}
+
+function zone(minX, maxX, minZ, maxZ, surfaceType, depth, kind = "island") {
+  return Object.freeze({
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    surfaceType,
+    depth,
+    kind,
+  });
+}
+
+function createLayout({ start, key, gate, exit, frontZones, backZones, gateZone }) {
+  return Object.freeze({
+    start,
+    key,
+    gate,
+    exit,
+    frontZones: Object.freeze(frontZones),
+    backZones: Object.freeze(backZones),
+    gateZone,
+  });
+}
+
+function pathProgress(layout, point) {
+  const pathX = layout.exit.x - layout.start.x;
+  const pathZ = layout.exit.z - layout.start.z;
+  return (point.x - layout.start.x) * pathX + (point.z - layout.start.z) * pathZ;
+}
+
+function assertKeyBeforeGate(id, layout) {
+  if (pathProgress(layout, layout.key) >= pathProgress(layout, layout.gate)) {
+    throw new Error(`${id} must place the key before the gate along the main path.`);
+  }
+}
+
+function createArea({
+  id,
+  label,
+  description,
+  keyHint,
+  gateHint,
+  clearHint,
+  rewardText,
+  theme,
+  layout,
+  enemyHealth,
+  enemyDamage,
+  enemySpeed,
+  enemyAggroRange,
+  enemyAttackRange,
+  frontEnemySpawns,
+  backEnemySpawns,
+}) {
+  assertKeyBeforeGate(id, layout);
+
+  return Object.freeze({
+    id,
+    label,
+    description,
+    keyHint,
+    gateHint,
+    clearHint,
+    rewardText,
+    theme: Object.freeze(theme),
+    layout,
+    enemyHealth,
+    enemyDamage,
+    enemySpeed,
+    enemyAggroRange,
+    enemyAttackRange,
+    frontEnemySpawns: Object.freeze(frontEnemySpawns),
+    backEnemySpawns: Object.freeze(backEnemySpawns),
+  });
+}
 
 export const CHARACTER_DEFS = Object.freeze({
   dragon: {
@@ -17,28 +95,35 @@ export const CHARACTER_DEFS = Object.freeze({
     accent: "#f1c85d",
     detailColor: "#efb24d",
     eyeColor: "#8ff6a7",
-    description: "A fast purple dragon hero with broad wing slashes and a fiery orb.",
-    rewardText: "Dragon reward: +3 basic damage and +0.2 movement speed.",
-    maxHealth: 96,
+    description: "Fast all-rounder with sweeping melee and a reliable fire orb.",
+    rewardText: "Drake reward: +1 basic damage and +0.04 movement speed.",
+    areaReward: {
+      basicDamage: 1,
+      speed: 0.04,
+    },
+    maxHealth: 98,
     speed: 8.6,
-    jumpStrength: 11.6,
+    jumpStrength: 11.7,
     basicAttack: {
       name: "Wing Slash",
+      pattern: "double",
+      spreadDegrees: 42,
       cooldown: 0.34,
       damage: 18,
       range: 3.5,
       radius: 2.9,
-      arcDegrees: 75,
+      arcDegrees: 78,
       color: "#9ceeff",
     },
     special: {
       name: "Flame Orb",
       type: "projectile",
-      cooldown: 3.2,
+      cooldown: 3.1,
       damage: 32,
       radius: 0.5,
       speed: 18,
       distance: 20,
+      pierce: 1,
       color: "#ff9554",
     },
   },
@@ -46,33 +131,41 @@ export const CHARACTER_DEFS = Object.freeze({
     id: "reef",
     name: "Lagoon Lancer",
     title: "Harpoon Scout",
-    cost: 35,
+    cost: 30,
     form: "shark",
     color: "#3c97aa",
     secondaryColor: "#c6e7f1",
     accent: "#5a6570",
     detailColor: "#f0cf6a",
     eyeColor: "#ffd45d",
-    description: "A sturdy lagoon raider with a harpoon sweep and a pressurized water shot.",
-    rewardText: "Reef reward: +10 max health and +3 special damage.",
-    maxHealth: 112,
+    description: "Sturdy mid-range hunter with a broad sweep and water shot.",
+    rewardText: "Lagoon reward: +4 max health, +1 special damage, and a small heal.",
+    areaReward: {
+      maxHealth: 4,
+      specialDamage: 1,
+      heal: 6,
+    },
+    maxHealth: 114,
     speed: 7.8,
     jumpStrength: 10.9,
     basicAttack: {
       name: "Harpoon Sweep",
+      pattern: "stab",
       cooldown: 0.4,
       damage: 20,
-      range: 3.8,
+      range: 3.9,
       radius: 3.2,
-      arcDegrees: 75,
+      arcDegrees: 44,
       color: "#8fe8ff",
     },
     special: {
       name: "Tidal Shot",
       type: "projectile",
-      cooldown: 3.6,
-      damage: 36,
-      radius: 0.6,
+      count: 3,
+      spreadDegrees: 28,
+      cooldown: 3.5,
+      damage: 24,
+      radius: 0.52,
       speed: 16,
       distance: 18,
       color: "#73efff",
@@ -82,489 +175,773 @@ export const CHARACTER_DEFS = Object.freeze({
     id: "titan",
     name: "Magma Mauler",
     title: "Lava Bruiser",
-    cost: 80,
+    cost: 60,
     form: "brute",
     color: "#cf5031",
     secondaryColor: "#7b291d",
     accent: "#ffbf55",
     detailColor: "#ffd26a",
     eyeColor: "#fff3c0",
-    description: "A heavy magma bruiser with oversized gauntlet hits and a fiery ground slam.",
-    rewardText: "Titan reward: +14 max health and +4 slam damage.",
-    maxHealth: 132,
-    speed: 7.1,
+    description: "Heavy brawler with the hardest hits and a room-clearing slam.",
+    rewardText: "Magma reward: +5 max health, +2 slam damage, and a bigger heal.",
+    areaReward: {
+      maxHealth: 5,
+      specialDamage: 2,
+      heal: 8,
+    },
+    maxHealth: 134,
+    speed: 7.05,
     jumpStrength: 10.2,
     basicAttack: {
       name: "Gauntlet Crush",
+      pattern: "spin",
       cooldown: 0.52,
       damage: 24,
       range: 3.2,
-      radius: 3.3,
-      arcDegrees: 75,
+      radius: 3.4,
+      arcDegrees: 88,
       color: "#ffe099",
     },
     special: {
       name: "Rune Slam",
       type: "slam",
-      cooldown: 4.4,
+      rings: 2,
+      cooldown: 4.2,
       damage: 42,
       radius: 5.4,
       color: "#8ff6de",
     },
   },
+  gale: {
+    id: "gale",
+    name: "Stormwing Ace",
+    title: "Sky Raider",
+    cost: 85,
+    form: "dragon",
+    color: "#2a87d7",
+    secondaryColor: "#d9f4ff",
+    accent: "#ffe596",
+    detailColor: "#8bd6ff",
+    eyeColor: "#f8fdff",
+    description: "A glass-cannon flier built around speed, reach, and quick cooldowns.",
+    rewardText: "Stormwing reward: +1 basic damage and +0.05 movement speed.",
+    areaReward: {
+      basicDamage: 1,
+      speed: 0.05,
+    },
+    maxHealth: 88,
+    speed: 9.4,
+    jumpStrength: 12.2,
+    basicAttack: {
+      name: "Gale Cut",
+      pattern: "double",
+      spreadDegrees: 56,
+      cooldown: 0.3,
+      damage: 16,
+      range: 3.9,
+      radius: 2.6,
+      arcDegrees: 64,
+      color: "#bdf9ff",
+    },
+    special: {
+      name: "Sky Bolt",
+      type: "projectile",
+      count: 2,
+      spreadDegrees: 16,
+      cooldown: 2.6,
+      damage: 20,
+      radius: 0.48,
+      speed: 22,
+      distance: 23,
+      color: "#d7fbff",
+    },
+  },
+  hex: {
+    id: "hex",
+    name: "Midnight Gearguard",
+    title: "Clocktower Sentinel",
+    cost: 115,
+    form: "brute",
+    color: "#5d4b97",
+    secondaryColor: "#231a40",
+    accent: "#9de4ff",
+    detailColor: "#c9a0ff",
+    eyeColor: "#9df7ff",
+    description: "A deliberate control hero with a huge arc and punishing burst damage.",
+    rewardText: "Gearguard reward: +4 max health and +2 special damage.",
+    areaReward: {
+      maxHealth: 4,
+      specialDamage: 2,
+      heal: 4,
+    },
+    maxHealth: 120,
+    speed: 7.4,
+    jumpStrength: 10.8,
+    basicAttack: {
+      name: "Cog Cleave",
+      pattern: "spin",
+      cooldown: 0.46,
+      damage: 22,
+      range: 3.6,
+      radius: 3.5,
+      arcDegrees: 102,
+      color: "#c6e8ff",
+    },
+    special: {
+      name: "Phantom Burst",
+      type: "burst",
+      count: 8,
+      cooldown: 3.4,
+      damage: 18,
+      radius: 0.46,
+      speed: 14,
+      distance: 12,
+      color: "#7ed8ff",
+    },
+  },
+  frost: {
+    id: "frost",
+    name: "Frost Fang Raider",
+    title: "Tundra Hunter",
+    cost: 145,
+    form: "shark",
+    color: "#7ec9f2",
+    secondaryColor: "#eff9ff",
+    accent: "#5f8fb3",
+    detailColor: "#bde7ff",
+    eyeColor: "#f7ffff",
+    description: "Balanced finisher with reliable knockback and a heavy icy shot.",
+    rewardText: "Frostfang reward: +3 max health, +1 basic damage, and a heal.",
+    areaReward: {
+      maxHealth: 3,
+      basicDamage: 1,
+      heal: 6,
+    },
+    maxHealth: 108,
+    speed: 8.2,
+    jumpStrength: 11.2,
+    basicAttack: {
+      name: "Icebreaker Sweep",
+      cooldown: 0.38,
+      damage: 19,
+      range: 3.7,
+      radius: 3.1,
+      arcDegrees: 84,
+      color: "#e3fbff",
+    },
+    special: {
+      name: "Glacier Shot",
+      type: "projectile",
+      cooldown: 3.3,
+      damage: 38,
+      radius: 0.68,
+      speed: 17,
+      distance: 19,
+      pierce: 2,
+      color: "#baf7ff",
+    },
+  },
+  ember: {
+    id: "ember",
+    name: "Emberflare Glider",
+    title: "Solar Firestarter",
+    cost: 175,
+    form: "dragon",
+    color: "#f27a2e",
+    secondaryColor: "#ffd15c",
+    accent: "#fff2a8",
+    detailColor: "#c43c28",
+    eyeColor: "#fff7cf",
+    description: "A nimble dragon with scorching reach and a fast piercing fire shot.",
+    rewardText: "Emberflare reward: +1 basic damage, +1 special damage, and a small heal.",
+    areaReward: {
+      basicDamage: 1,
+      specialDamage: 1,
+      heal: 5,
+    },
+    maxHealth: 94,
+    speed: 9.1,
+    jumpStrength: 12,
+    basicAttack: {
+      name: "Solar Swipe",
+      pattern: "double",
+      spreadDegrees: 32,
+      cooldown: 0.32,
+      damage: 18,
+      range: 4,
+      radius: 2.8,
+      arcDegrees: 72,
+      color: "#ffe194",
+    },
+    special: {
+      name: "Sunspike",
+      type: "projectile",
+      count: 5,
+      spreadDegrees: 36,
+      cooldown: 2.8,
+      damage: 16,
+      radius: 0.42,
+      speed: 21,
+      distance: 22,
+      color: "#ffbd55",
+    },
+  },
+  terra: {
+    id: "terra",
+    name: "Terra Thornback",
+    title: "Rootbound Guardian",
+    cost: 205,
+    form: "brute",
+    color: "#5f9a4f",
+    secondaryColor: "#36552f",
+    accent: "#f0d77a",
+    detailColor: "#a86f42",
+    eyeColor: "#d9ffd3",
+    description: "A tough guardian with sweeping thorn strikes and a huge earth slam.",
+    rewardText: "Terra reward: +6 max health and +1 basic damage.",
+    areaReward: {
+      maxHealth: 6,
+      basicDamage: 1,
+      heal: 7,
+    },
+    maxHealth: 142,
+    speed: 6.9,
+    jumpStrength: 10,
+    basicAttack: {
+      name: "Thorn Knuckle",
+      pattern: "spin",
+      cooldown: 0.5,
+      damage: 25,
+      range: 3.4,
+      radius: 3.6,
+      arcDegrees: 96,
+      color: "#d9ff9a",
+    },
+    special: {
+      name: "Rootquake",
+      type: "slam",
+      rings: 3,
+      cooldown: 4.4,
+      damage: 46,
+      radius: 5.8,
+      color: "#c8ff8d",
+    },
+  },
+  volt: {
+    id: "volt",
+    name: "Voltfin Striker",
+    title: "Lightning Reef Duelist",
+    cost: 240,
+    form: "shark",
+    color: "#285bd8",
+    secondaryColor: "#f5fbff",
+    accent: "#ffec5f",
+    detailColor: "#74dcff",
+    eyeColor: "#fff6a8",
+    description: "A quick reef fighter with snappy cooldowns and electric burst shots.",
+    rewardText: "Voltfin reward: +0.05 movement speed, +2 special damage, and a small heal.",
+    areaReward: {
+      speed: 0.05,
+      specialDamage: 2,
+      heal: 5,
+    },
+    maxHealth: 104,
+    speed: 8.7,
+    jumpStrength: 11.4,
+    basicAttack: {
+      name: "Static Spear",
+      pattern: "stab",
+      cooldown: 0.35,
+      damage: 20,
+      range: 3.8,
+      radius: 3,
+      arcDegrees: 38,
+      color: "#f7ff91",
+    },
+    special: {
+      name: "Storm Harpoon",
+      type: "projectile",
+      count: 3,
+      spreadDegrees: 18,
+      cooldown: 2.9,
+      damage: 22,
+      radius: 0.46,
+      speed: 20,
+      distance: 21,
+      pierce: 1,
+      color: "#f9ff6f",
+    },
+  },
+  klins: {
+    id: "klins",
+    name: "Mr Klins",
+    title: "Keyboard Commander",
+    cost: 275,
+    form: "teacher",
+    color: "#8f9aa7",
+    secondaryColor: "#2d3440",
+    accent: "#f4f7fb",
+    detailColor: "#c88762",
+    eyeColor: "#95d4ff",
+    description: "A goofy keyboard-swinging hero with fast bonks and a spray of keycaps.",
+    rewardText: "Mr Klins reward: +1 basic damage, +0.04 movement speed, and a small heal.",
+    areaReward: {
+      basicDamage: 1,
+      speed: 0.04,
+      heal: 5,
+    },
+    maxHealth: 110,
+    speed: 8.4,
+    jumpStrength: 11.1,
+    basicAttack: {
+      name: "Keyboard Bonk",
+      pattern: "double",
+      spreadDegrees: 26,
+      cooldown: 0.36,
+      damage: 21,
+      range: 3.8,
+      radius: 3,
+      arcDegrees: 82,
+      color: "#f4f7fb",
+    },
+    special: {
+      name: "Keycap Scatter",
+      type: "projectile",
+      count: 6,
+      spreadDegrees: 44,
+      cooldown: 3,
+      damage: 15,
+      radius: 0.38,
+      speed: 20,
+      distance: 19,
+      pierce: 1,
+      color: "#d7ecff",
+    },
+  },
 });
 
-export const CHARACTER_LIST = Object.values(CHARACTER_DEFS);
+export const CHARACTER_LIST = Object.freeze(Object.values(CHARACTER_DEFS));
 
-export const BASE_LAYOUT = Object.freeze({
-  start: { x: -34, z: 0 },
-  key: { x: 21, z: 18 },
-  gate: { x: 18, z: 0 },
-  exit: { x: 62, z: -1 },
-  frontZones: [
-    { minX: -46, maxX: -26, minZ: -13, maxZ: 13, surfaceType: "grass", depth: 6.1 },
-    { minX: -27, maxX: -9, minZ: -4.8, maxZ: 4.8, surfaceType: "wood", depth: 3.6 },
-    { minX: -12, maxX: 15, minZ: -16, maxZ: 16, surfaceType: "grass", depth: 6.4 },
-    { minX: 8, maxX: 16, minZ: 8, maxZ: 18, surfaceType: "wood", depth: 3.5 },
-    { minX: 14, maxX: 29, minZ: 11, maxZ: 25, surfaceType: "grass", depth: 5.4 },
-  ],
-  backZones: [
-    { minX: 22, maxX: 43, minZ: -13, maxZ: 13, surfaceType: "grass", depth: 6 },
-    { minX: 41, maxX: 51, minZ: -4.4, maxZ: 4.4, surfaceType: "wood", depth: 3.5 },
-    { minX: 49, maxX: 72, minZ: -17, maxZ: 17, surfaceType: "grass", depth: 6.7 },
-  ],
-  gateZone: { minX: 11, maxX: 24, minZ: -5.2, maxZ: 5.2, surfaceType: "wood", depth: 3.8 },
-});
-
-const CRESCENT_LAYOUT = Object.freeze({
-  start: { x: -35, z: 1 },
-  key: { x: 24, z: 18 },
-  gate: { x: 18, z: 1 },
-  exit: { x: 64, z: 1 },
-  frontZones: [
-    { minX: -47, maxX: -29, minZ: -12, maxZ: 14, surfaceType: "grass", depth: 6.2 },
-    { minX: -30, maxX: -8, minZ: -6, maxZ: 4.8, surfaceType: "wood", depth: 3.6 },
-    { minX: -10, maxX: 17, minZ: -16, maxZ: 15, surfaceType: "grass", depth: 6.3 },
-    { minX: 8, maxX: 18, minZ: 8, maxZ: 19, surfaceType: "wood", depth: 3.5 },
-    { minX: 15, maxX: 32, minZ: 11, maxZ: 25, surfaceType: "grass", depth: 5.5 },
-  ],
-  backZones: [
-    { minX: 23, maxX: 45, minZ: -14, maxZ: 14, surfaceType: "grass", depth: 6.1 },
-    { minX: 43, maxX: 54, minZ: -3.8, maxZ: 4.8, surfaceType: "wood", depth: 3.5 },
-    { minX: 51, maxX: 75, minZ: -16, maxZ: 17, surfaceType: "grass", depth: 6.7 },
-  ],
-  gateZone: { minX: 11, maxX: 24, minZ: -4.8, maxZ: 5.8, surfaceType: "wood", depth: 3.8 },
-});
-
-const LOCKSTEP_LAYOUT = Object.freeze({
-  start: { x: -35, z: -2 },
-  key: { x: 21, z: 20 },
-  gate: { x: 18, z: 0 },
-  exit: { x: 63, z: -2 },
-  frontZones: [
-    { minX: -46, maxX: -28, minZ: -14, maxZ: 12, surfaceType: "grass", depth: 6.1 },
-    { minX: -29, maxX: -8, minZ: -6.4, maxZ: 3.8, surfaceType: "wood", depth: 3.6 },
-    { minX: -11, maxX: 15, minZ: -18, maxZ: 14, surfaceType: "grass", depth: 6.5 },
-    { minX: 8, maxX: 18, minZ: 10, maxZ: 21, surfaceType: "wood", depth: 3.5 },
-    { minX: 14, maxX: 30, minZ: 12, maxZ: 27, surfaceType: "grass", depth: 5.5 },
-  ],
-  backZones: [
-    { minX: 22, maxX: 43, minZ: -13, maxZ: 13, surfaceType: "grass", depth: 6.1 },
-    { minX: 41, maxX: 53, minZ: -6, maxZ: 3.2, surfaceType: "wood", depth: 3.5 },
-    { minX: 49, maxX: 73, minZ: -18, maxZ: 14, surfaceType: "grass", depth: 6.8 },
-  ],
-  gateZone: { minX: 11, maxX: 24, minZ: -5.6, maxZ: 5, surfaceType: "wood", depth: 3.8 },
-});
-
-export const LEVEL_THEMES = Object.freeze([
-  {
-    id: "cloudbreak",
-    label: "Cloudbreak Causeway",
-    sky: "#87beff",
-    fog: "#dff7ff",
-    grass: "#69d45c",
-    grassDark: "#33843d",
-    sand: "#ecd9ac",
-    cliff: "#7e5b3f",
-    cliffDark: "#4f311d",
-    stone: "#cdb89e",
-    stoneDark: "#7f6a50",
-    wood: "#8a592e",
-    woodDark: "#593212",
-    water: "#7ceaff",
-    portal: "#ffd67e",
-    crystal: "#9ff8ff",
-    gate: "#d8c597",
-    enemy: "#7fce48",
-    enemyDark: "#3e6f22",
-    rewardText: "Causeway clear. The next floating gate shimmers alive.",
+const CRYSTAL_CAVERNS = createArea({
+  id: "crystal-caverns",
+  label: "Crystal Caverns",
+  description: "Deep underground, ancient crystals hum around broken mine tracks.",
+  keyHint: "Search the upper crystal ledge and take the cavern key.",
+  gateHint: "Bring the key back to the mine gate in the center hall.",
+  clearHint: "Defeat the cave guards, then enter the restored crystal portal.",
+  rewardText: "Crystal Caverns cleared. The cave portal sings back to life.",
+  theme: {
+    biome: "crystal",
+    sky: "#121a3a",
+    fog: "#7f71d2",
+    sun: "#b5a9ff",
+    sunIntensity: 1,
+    hemiIntensity: 0.78,
+    fogNear: 28,
+    fogFar: 112,
+    grass: "#8b7cff",
+    grassDark: "#493f97",
+    sand: "#6b61be",
+    cliff: "#5a4da0",
+    cliffDark: "#2d2759",
+    stone: "#8d88d7",
+    stoneDark: "#4f4a86",
+    wood: "#73553d",
+    woodDark: "#402917",
+    metal: "#cfdcff",
+    metalDark: "#5a658b",
+    ice: "#9cf7ff",
+    iceDark: "#5790a8",
+    water: "#18386b",
+    waterOpacity: 0.72,
+    shimmerOpacity: 0.08,
+    portal: "#8ef3ff",
+    crystal: "#d681ff",
+    gate: "#90dcff",
+    enemy: "#bfff5a",
+    enemyDark: "#4d7a19",
+    backdropSurfaceType: "crystal",
   },
-  {
-    id: "sunvault",
-    label: "Sunvault Span",
-    sky: "#7ac9ff",
-    fog: "#e8ffff",
-    grass: "#63c957",
-    grassDark: "#2f7a32",
-    sand: "#f0d7a0",
-    cliff: "#8b6744",
-    cliffDark: "#55331d",
-    stone: "#d9c58e",
-    stoneDark: "#85704e",
-    wood: "#94663d",
-    woodDark: "#5a3618",
-    water: "#74e7ff",
-    portal: "#ffe48a",
-    crystal: "#98efff",
-    gate: "#dec48b",
-    enemy: "#8dd552",
-    enemyDark: "#427327",
-    rewardText: "Vault clear. The sun bridge to the next island powers up.",
-  },
-  {
-    id: "emberkeep",
-    label: "Emberkeep Lock",
-    sky: "#7c62d4",
-    fog: "#ffccad",
-    grass: "#80c953",
-    grassDark: "#3c6f2a",
-    sand: "#e0c096",
-    cliff: "#7e5738",
-    cliffDark: "#4f2d18",
-    stone: "#c28f72",
-    stoneDark: "#784938",
-    wood: "#8e522f",
-    woodDark: "#572a14",
-    water: "#7be1ff",
-    portal: "#ffce79",
-    crystal: "#ffc894",
-    gate: "#d7a56c",
-    enemy: "#98de57",
-    enemyDark: "#487225",
-    rewardText: "Keep clear. The final portal ring answers your champion.",
-  },
-  {
-    id: "tidewild",
-    label: "Tidewild Crossing",
-    sky: "#78d8ff",
-    fog: "#e6fffd",
-    grass: "#61d468",
-    grassDark: "#2f8547",
-    sand: "#efe2ad",
-    cliff: "#7a5e40",
-    cliffDark: "#4c311d",
-    stone: "#d2c2a4",
-    stoneDark: "#75624c",
-    wood: "#8d6033",
-    woodDark: "#573517",
-    water: "#65f0ff",
-    portal: "#ffe08b",
-    crystal: "#8bfef7",
-    gate: "#e5c78f",
-    enemy: "#6fd25b",
-    enemyDark: "#2d722a",
-    rewardText: "Tidewild clear. Another island chain rolls into view.",
-  },
-  {
-    id: "moonreef",
-    label: "Moonreef Run",
-    sky: "#5d7ae0",
-    fog: "#d9f0ff",
-    grass: "#5dca7a",
-    grassDark: "#2f6f4d",
-    sand: "#d8d1ab",
-    cliff: "#6e607a",
-    cliffDark: "#423550",
-    stone: "#c9c4da",
-    stoneDark: "#6a617d",
-    wood: "#8c6843",
-    woodDark: "#563a22",
-    water: "#78d9ff",
-    portal: "#cfe8ff",
-    crystal: "#98fff1",
-    gate: "#dfd7c3",
-    enemy: "#7adf83",
-    enemyDark: "#345f37",
-    rewardText: "Moonreef clear. The reef path brightens beneath the clouds.",
-  },
-  {
-    id: "stormspire",
-    label: "Stormspire Bastion",
-    sky: "#6077c9",
-    fog: "#f1d8c3",
-    grass: "#7ecc58",
-    grassDark: "#446e2e",
-    sand: "#d9bc8a",
-    cliff: "#7d5844",
-    cliffDark: "#4f311d",
-    stone: "#c8a07d",
-    stoneDark: "#77543a",
-    wood: "#8e522f",
-    woodDark: "#552814",
-    water: "#72dffb",
-    portal: "#ffd384",
-    crystal: "#ffd3a2",
-    gate: "#e0b37c",
-    enemy: "#a8e05e",
-    enemyDark: "#4d7528",
-    rewardText: "Stormspire clear. The final storm gate crackles open.",
-  },
-]);
-
-const LAYOUT_TEMPLATES = Object.freeze([BASE_LAYOUT, CRESCENT_LAYOUT, LOCKSTEP_LAYOUT]);
-const STAGE_PREFIXES = Object.freeze([
-  "Shifting",
-  "Bright",
-  "Hidden",
-  "Stormlit",
-  "Ancient",
-  "Echoing",
-  "Wild",
-  "Broken",
-  "Crystal",
-  "Sunken",
-]);
-const STAGE_SUFFIXES = Object.freeze([
-  "Causeway",
-  "Atoll",
-  "Reef",
-  "Span",
-  "Lock",
-  "Crossing",
-  "Cove",
-  "Reach",
-  "Rise",
-  "Run",
-]);
-
-function seededUnit(stage, salt) {
-  const value = Math.sin(stage * 127.1 + salt * 311.7) * 43758.5453123;
-  return value - Math.floor(value);
-}
-
-function seededRange(stage, salt, min, max) {
-  return min + seededUnit(stage, salt) * (max - min);
-}
-
-function roundTenth(value) {
-  return Math.round(value * 10) / 10;
-}
-
-function rectWidth(rect) {
-  return rect.maxX - rect.minX;
-}
-
-function rectDepth(rect) {
-  return rect.maxZ - rect.minZ;
-}
-
-function rectCenterX(rect) {
-  return (rect.minX + rect.maxX) / 2;
-}
-
-function rectCenterZ(rect) {
-  return (rect.minZ + rect.maxZ) / 2;
-}
-
-function makeRect(centerX, width, centerZ, depth, surfaceType, undersideDepth) {
-  const safeWidth = Math.max(6, roundTenth(width));
-  const safeDepth = Math.max(6, roundTenth(depth));
-  return {
-    minX: roundTenth(centerX - safeWidth / 2),
-    maxX: roundTenth(centerX + safeWidth / 2),
-    minZ: roundTenth(centerZ - safeDepth / 2),
-    maxZ: roundTenth(centerZ + safeDepth / 2),
-    surfaceType,
-    depth: roundTenth(undersideDepth),
-  };
-}
-
-function pointInRect(rect, xRatio, zRatio) {
-  return {
-    x: roundTenth(rect.minX + rectWidth(rect) * xRatio),
-    z: roundTenth(rect.minZ + rectDepth(rect) * zRatio),
-  };
-}
-
-function buildLayoutForStage(areaIndex) {
-  const stage = areaIndex + 1;
-  const template = LAYOUT_TEMPLATES[areaIndex % LAYOUT_TEMPLATES.length];
-  const [startBase, frontBridgeBase, mainBase, keyBridgeBase, keyBase] = template.frontZones;
-  const [backBase, exitBridgeBase, exitBase] = template.backZones;
-  const gateBase = template.gateZone;
-
-  const startCenterZ = rectCenterZ(startBase) + seededRange(stage, 1, -1.8, 1.8);
-  const mainCenterZ = rectCenterZ(mainBase) + seededRange(stage, 2, -2.4, 2.4);
-  const keyBridgeCenterZ = rectCenterZ(keyBridgeBase) + seededRange(stage, 3, -1.5, 2.5);
-  const keyCenterZ = rectCenterZ(keyBase) + seededRange(stage, 4, -2.1, 3.4);
-  const backCenterZ = rectCenterZ(backBase) + seededRange(stage, 5, -2.6, 2.6);
-  const exitCenterZ = rectCenterZ(exitBase) + seededRange(stage, 6, -2.8, 2.8);
-  const gateCenterZ = rectCenterZ(gateBase) + seededRange(stage, 7, -1.2, 1.2);
-
-  const startRect = makeRect(
-    rectCenterX(startBase) + seededRange(stage, 8, -1.4, 1.4),
-    rectWidth(startBase) + seededRange(stage, 9, -2.6, 4.2),
-    startCenterZ,
-    rectDepth(startBase) + seededRange(stage, 10, -3.6, 5.2),
-    startBase.surfaceType,
-    startBase.depth
-  );
-
-  const frontBridgeOverlap = roundTenth(seededRange(stage, 11, 1.4, 2.8));
-  const frontBridgeRect = makeRect(
-    startRect.maxX - frontBridgeOverlap + (rectWidth(frontBridgeBase) + seededRange(stage, 12, -1.4, 2.6)) / 2,
-    rectWidth(frontBridgeBase) + seededRange(stage, 12, -1.4, 2.6),
-    startCenterZ + (mainCenterZ - startCenterZ) * 0.45 + seededRange(stage, 13, -0.9, 0.9),
-    rectDepth(frontBridgeBase) + seededRange(stage, 14, -1.2, 1.8),
-    frontBridgeBase.surfaceType,
-    frontBridgeBase.depth
-  );
-
-  const mainOverlap = roundTenth(seededRange(stage, 15, 1.8, 3.5));
-  const mainRect = makeRect(
-    frontBridgeRect.maxX - mainOverlap + (rectWidth(mainBase) + seededRange(stage, 16, -3.4, 5.8)) / 2,
-    rectWidth(mainBase) + seededRange(stage, 16, -3.4, 5.8),
-    mainCenterZ,
-    rectDepth(mainBase) + seededRange(stage, 17, -4.2, 6.4),
-    mainBase.surfaceType,
-    mainBase.depth
-  );
-
-  const keyBridgeOverlap = roundTenth(seededRange(stage, 18, 6.2, 8.8));
-  const keyBridgeRect = makeRect(
-    mainRect.maxX - keyBridgeOverlap + (rectWidth(keyBridgeBase) + seededRange(stage, 19, -1.1, 2.1)) / 2,
-    rectWidth(keyBridgeBase) + seededRange(stage, 19, -1.1, 2.1),
-    keyBridgeCenterZ,
-    rectDepth(keyBridgeBase) + seededRange(stage, 20, -0.8, 2.0),
-    keyBridgeBase.surfaceType,
-    keyBridgeBase.depth
-  );
-
-  const keyOverlap = roundTenth(seededRange(stage, 21, 1.2, 2.6));
-  const keyRect = makeRect(
-    keyBridgeRect.maxX - keyOverlap + (rectWidth(keyBase) + seededRange(stage, 22, -1.8, 4.6)) / 2,
-    rectWidth(keyBase) + seededRange(stage, 22, -1.8, 4.6),
-    keyCenterZ,
-    rectDepth(keyBase) + seededRange(stage, 23, -2.2, 4.6),
-    keyBase.surfaceType,
-    keyBase.depth
-  );
-
-  const gateOverlap = roundTenth(seededRange(stage, 24, 2.4, 4.8));
-  const gateRect = makeRect(
-    mainRect.maxX - gateOverlap + (rectWidth(gateBase) + seededRange(stage, 25, -1.6, 2.8)) / 2,
-    rectWidth(gateBase) + seededRange(stage, 25, -1.6, 2.8),
-    gateCenterZ,
-    rectDepth(gateBase) + seededRange(stage, 26, -1.2, 2.2),
-    gateBase.surfaceType,
-    gateBase.depth
-  );
-
-  const backOverlap = roundTenth(seededRange(stage, 27, 1.9, 3.3));
-  const backRect = makeRect(
-    gateRect.maxX - backOverlap + (rectWidth(backBase) + seededRange(stage, 28, -2.6, 5.2)) / 2,
-    rectWidth(backBase) + seededRange(stage, 28, -2.6, 5.2),
-    backCenterZ,
-    rectDepth(backBase) + seededRange(stage, 29, -3.6, 5.4),
-    backBase.surfaceType,
-    backBase.depth
-  );
-
-  const exitBridgeOverlap = roundTenth(seededRange(stage, 30, 1.6, 2.8));
-  const exitBridgeRect = makeRect(
-    backRect.maxX - exitBridgeOverlap + (rectWidth(exitBridgeBase) + seededRange(stage, 31, -1.4, 2.6)) / 2,
-    rectWidth(exitBridgeBase) + seededRange(stage, 31, -1.4, 2.6),
-    backCenterZ + (exitCenterZ - backCenterZ) * 0.55 + seededRange(stage, 32, -0.9, 0.9),
-    rectDepth(exitBridgeBase) + seededRange(stage, 33, -1.1, 2.0),
-    exitBridgeBase.surfaceType,
-    exitBridgeBase.depth
-  );
-
-  const exitOverlap = roundTenth(seededRange(stage, 34, 1.6, 2.8));
-  const exitRect = makeRect(
-    exitBridgeRect.maxX - exitOverlap + (rectWidth(exitBase) + seededRange(stage, 35, -2.8, 5.8)) / 2,
-    rectWidth(exitBase) + seededRange(stage, 35, -2.8, 5.8),
-    exitCenterZ,
-    rectDepth(exitBase) + seededRange(stage, 36, -4.2, 6.2),
-    exitBase.surfaceType,
-    exitBase.depth
-  );
-
-  return {
-    start: {
-      x: roundTenth(startRect.minX + 4.4 + seededRange(stage, 37, -0.8, 0.8)),
-      z: roundTenth(startCenterZ + seededRange(stage, 38, -0.8, 0.8)),
-    },
-    key: {
-      x: roundTenth(rectCenterX(keyRect) + seededRange(stage, 39, -1.2, 1.2)),
-      z: roundTenth(keyCenterZ + seededRange(stage, 40, -1.1, 1.1)),
-    },
-    gate: {
-      x: roundTenth(rectCenterX(gateRect) + seededRange(stage, 41, -0.6, 0.6)),
-      z: roundTenth(gateCenterZ + seededRange(stage, 42, -0.8, 0.8)),
-    },
-    exit: {
-      x: roundTenth(exitRect.maxX - 6.4 + seededRange(stage, 43, -1.0, 0.8)),
-      z: roundTenth(exitCenterZ + seededRange(stage, 44, -1.0, 1.0)),
-    },
-    frontZones: [startRect, frontBridgeRect, mainRect, keyBridgeRect, keyRect],
-    backZones: [backRect, exitBridgeRect, exitRect],
-    gateZone: gateRect,
-  };
-}
-
-function createSpawnPools(layout) {
-  const [startRect, , mainRect, , keyRect] = layout.frontZones;
-  const [backRect, bridgeRect, exitRect] = layout.backZones;
-  const gateRect = layout.gateZone;
-
-  return {
-    front: [
-      pointInRect(startRect, 0.35, 0.3),
-      pointInRect(startRect, 0.7, 0.68),
-      pointInRect(mainRect, 0.28, 0.72),
-      pointInRect(mainRect, 0.68, 0.28),
-      pointInRect(mainRect, 0.55, 0.52),
-      pointInRect(keyRect, 0.5, 0.45),
-      pointInRect(keyRect, 0.34, 0.76),
+  layout: createLayout({
+    start: point(0, 44),
+    key: point(14, 16),
+    gate: point(0, 6),
+    exit: point(0, -48),
+    frontZones: [
+      zone(-18, 18, 34, 52, "crystal", 6.2, "island"),
+      zone(-5, 5, 18, 36, "stone", 3.8, "bridge"),
+      zone(-20, 20, 4, 22, "crystal", 6.8, "island"),
+      zone(8, 16, -2, 12, "wood", 3.6, "bridge"),
+      zone(12, 30, -10, 8, "crystal", 6.1, "island"),
     ],
-    back: [
-      pointInRect(backRect, 0.28, 0.34),
-      pointInRect(backRect, 0.68, 0.68),
-      pointInRect(gateRect, 0.78, 0.5),
-      pointInRect(bridgeRect, 0.5, 0.5),
-      pointInRect(exitRect, 0.24, 0.3),
-      pointInRect(exitRect, 0.72, 0.68),
-      pointInRect(exitRect, 0.52, 0.5),
+    backZones: [
+      zone(-14, 14, -18, 10, "crystal", 6.3, "island"),
+      zone(-4, 4, -38, -16, "wood", 3.6, "bridge"),
+      zone(-18, 18, -60, -36, "crystal", 6.9, "island"),
     ],
-  };
-}
+    gateZone: zone(-6, 6, -2, 12, "stone", 3.9, "bridge"),
+  }),
+  enemyHealth: 52,
+  enemyDamage: 10,
+  enemySpeed: 4.9,
+  enemyAggroRange: 18,
+  enemyAttackRange: 2.35,
+  frontEnemySpawns: [
+    point(-10, 46),
+    point(11, 40),
+    point(-12, 13),
+    point(5, 8),
+    point(22, -1),
+    point(15, 6),
+  ],
+  backEnemySpawns: [
+    point(-8, -7),
+    point(8, 2),
+    point(0, -22),
+    point(-12, -45),
+    point(10, -44),
+    point(11, -54),
+  ],
+});
 
-function createAreaLabel(stage, theme) {
-  const prefix = STAGE_PREFIXES[stage % STAGE_PREFIXES.length];
-  const suffix = STAGE_SUFFIXES[(stage * 3) % STAGE_SUFFIXES.length];
-  return `${theme.label} ${stage}: ${prefix} ${suffix}`;
-}
+const VOLCANO_VALLEY = createArea({
+  id: "volcano-valley",
+  label: "Volcano Valley",
+  description: "Molten rivers cut through basalt islands and a lava engine churns ahead.",
+  keyHint: "Push through the forge path and steal the engine key from the lava deck.",
+  gateHint: "Carry the key back across the heat bridge to unlock the magma lock.",
+  clearHint: "Wipe out the eruption guards and step into the cooled portal ring.",
+  rewardText: "Volcano Valley cleared. The lava flow settles into a safe crossing.",
+  theme: {
+    biome: "volcano",
+    sky: "#472018",
+    fog: "#ffbe83",
+    sun: "#ffcf8a",
+    sunIntensity: 1.28,
+    hemiIntensity: 0.94,
+    fogNear: 32,
+    fogFar: 118,
+    grass: "#776556",
+    grassDark: "#44352a",
+    sand: "#8e6b58",
+    cliff: "#6f4c39",
+    cliffDark: "#362016",
+    stone: "#6b5b55",
+    stoneDark: "#302726",
+    wood: "#7b4a29",
+    woodDark: "#43200d",
+    metal: "#d2a06a",
+    metalDark: "#684027",
+    ice: "#ffa76b",
+    iceDark: "#8d3922",
+    water: "#ff621f",
+    waterOpacity: 0.86,
+    shimmerOpacity: 0.1,
+    portal: "#ffd07c",
+    crystal: "#ff9449",
+    gate: "#ffbf6c",
+    enemy: "#69f4ff",
+    enemyDark: "#1f6671",
+    backdropSurfaceType: "volcanic",
+  },
+  layout: createLayout({
+    start: point(-18, 44),
+    key: point(-12, 14),
+    gate: point(-4, 6),
+    exit: point(12, -48),
+    frontZones: [
+      zone(-30, -8, 34, 52, "volcanic", 6, "island"),
+      zone(-22, -12, 18, 36, "stone", 3.6, "bridge"),
+      zone(-30, -4, 6, 22, "volcanic", 6.4, "island"),
+      zone(-8, 4, 0, 12, "stone", 3.6, "bridge"),
+      zone(4, 28, -16, 8, "volcanic", 5.8, "island"),
+    ],
+    backZones: [
+      zone(-18, 8, -20, 8, "volcanic", 6, "island"),
+      zone(0, 14, -38, -18, "stone", 3.6, "bridge"),
+      zone(-4, 28, -60, -36, "volcanic", 6.6, "island"),
+    ],
+    gateZone: zone(-10, 0, 0, 12, "stone", 3.7, "bridge"),
+  }),
+  enemyHealth: 62,
+  enemyDamage: 11,
+  enemySpeed: 5,
+  enemyAggroRange: 18,
+  enemyAttackRange: 2.4,
+  frontEnemySpawns: [
+    point(-24, 44),
+    point(-13, 36),
+    point(-22, 12),
+    point(-6, 8),
+    point(18, -8),
+    point(9, -3),
+  ],
+  backEnemySpawns: [
+    point(-10, -4),
+    point(2, 3),
+    point(7, -27),
+    point(6, -48),
+    point(20, -43),
+    point(15, -56),
+  ],
+});
+
+const SKY_PIRATE_FORTRESS = createArea({
+  id: "sky-pirate-fortress",
+  label: "Sky Pirate Fortress",
+  description: "Floating decks, chained catwalks, and pirate cannons fill the sky route.",
+  keyHint: "Break into the brig deck on the right and grab the captive key.",
+  gateHint: "Return to the main chain lock and open the rear command route.",
+  clearHint: "Clear the command deck, then jump into the air portal beyond it.",
+  rewardText: "Sky Pirate Fortress cleared. The cloud lane opens to the next island.",
+  theme: {
+    biome: "skyfort",
+    sky: "#8fd6ff",
+    fog: "#ebfbff",
+    sun: "#fff4b1",
+    sunIntensity: 1.4,
+    hemiIntensity: 1.12,
+    fogNear: 46,
+    fogFar: 150,
+    grass: "#77c06a",
+    grassDark: "#3d7e38",
+    sand: "#d8c093",
+    cliff: "#86674c",
+    cliffDark: "#553722",
+    stone: "#a2a6bd",
+    stoneDark: "#54596f",
+    wood: "#8a5f37",
+    woodDark: "#54341a",
+    metal: "#c6d0ea",
+    metalDark: "#53617f",
+    ice: "#90f0ff",
+    iceDark: "#46849d",
+    water: "#b7e8ff",
+    waterOpacity: 0.66,
+    shimmerOpacity: 0.14,
+    portal: "#8de9ff",
+    crystal: "#78cfff",
+    gate: "#e1c78e",
+    enemy: "#ff734b",
+    enemyDark: "#7a2d18",
+    backdropSurfaceType: "deck",
+  },
+  layout: createLayout({
+    start: point(0, 46),
+    key: point(12, 18),
+    gate: point(0, 8),
+    exit: point(0, -50),
+    frontZones: [
+      zone(-14, 14, 38, 54, "deck", 5.4, "island"),
+      zone(-6, 6, 22, 40, "metal", 3.4, "bridge"),
+      zone(-18, 18, 10, 28, "deck", 5.8, "island"),
+      zone(10, 20, -2, 14, "wood", 3.4, "bridge"),
+      zone(18, 36, -14, 8, "deck", 5.6, "island"),
+    ],
+    backZones: [
+      zone(-12, 12, -18, 8, "deck", 5.8, "island"),
+      zone(-6, 6, -38, -16, "metal", 3.6, "bridge"),
+      zone(-18, 18, -60, -34, "deck", 6.1, "island"),
+    ],
+    gateZone: zone(-4, 4, 4, 12, "metal", 3.6, "bridge"),
+  }),
+  enemyHealth: 72,
+  enemyDamage: 12,
+  enemySpeed: 5.2,
+  enemyAggroRange: 19,
+  enemyAttackRange: 2.45,
+  frontEnemySpawns: [
+    point(-8, 47),
+    point(7, 42),
+    point(-10, 18),
+    point(6, 14),
+    point(28, -5),
+    point(21, 3),
+  ],
+  backEnemySpawns: [
+    point(-8, -8),
+    point(5, -3),
+    point(0, -28),
+    point(-10, -48),
+    point(11, -44),
+    point(9, -57),
+  ],
+});
+
+const HAUNTED_CLOCKTOWER = createArea({
+  id: "haunted-clocktower",
+  label: "Haunted Clocktower",
+  description: "Twisted halls, broken time gears, and cursed lanterns rule the tower.",
+  keyHint: "Climb through the crooked gear hall and recover the lost time gear.",
+  gateHint: "Return the gear to the clock lock near the middle landing.",
+  clearHint: "Defeat the phantoms in the upper tower and enter the midnight portal.",
+  rewardText: "Haunted Clocktower cleared. Time steadies and the next path appears.",
+  theme: {
+    biome: "haunted",
+    sky: "#261845",
+    fog: "#9d88e2",
+    sun: "#d6c8ff",
+    sunIntensity: 0.92,
+    hemiIntensity: 0.82,
+    fogNear: 28,
+    fogFar: 110,
+    grass: "#6557a9",
+    grassDark: "#37276c",
+    sand: "#73629c",
+    cliff: "#4a3a75",
+    cliffDark: "#1e1736",
+    stone: "#7e76ad",
+    stoneDark: "#40395f",
+    wood: "#6e4d3a",
+    woodDark: "#392516",
+    metal: "#b9b0dd",
+    metalDark: "#5a527a",
+    ice: "#84dfff",
+    iceDark: "#37607e",
+    water: "#371e61",
+    waterOpacity: 0.8,
+    shimmerOpacity: 0.07,
+    portal: "#a9e7ff",
+    crystal: "#c58cff",
+    gate: "#d4b5ff",
+    enemy: "#8cff63",
+    enemyDark: "#2d6b20",
+    backdropSurfaceType: "haunted",
+  },
+  layout: createLayout({
+    start: point(-18, 44),
+    key: point(8, 18),
+    gate: point(4, 8),
+    exit: point(-12, -48),
+    frontZones: [
+      zone(-30, -8, 34, 52, "haunted", 6, "island"),
+      zone(-18, -8, 18, 36, "stone", 3.8, "bridge"),
+      zone(-10, 16, 6, 24, "haunted", 6.2, "island"),
+      zone(10, 20, -4, 12, "wood", 3.7, "bridge"),
+      zone(12, 30, -16, 6, "haunted", 6.4, "island"),
+    ],
+    backZones: [
+      zone(-14, 12, -20, 6, "haunted", 6.1, "island"),
+      zone(-6, 6, -38, -18, "stone", 3.7, "bridge"),
+      zone(-26, 0, -60, -34, "haunted", 6.7, "island"),
+    ],
+    gateZone: zone(-2, 10, 4, 12, "stone", 3.9, "bridge"),
+  }),
+  enemyHealth: 82,
+  enemyDamage: 13,
+  enemySpeed: 5.35,
+  enemyAggroRange: 19,
+  enemyAttackRange: 2.5,
+  frontEnemySpawns: [
+    point(-22, 46),
+    point(-12, 30),
+    point(0, 16),
+    point(13, 8),
+    point(22, -6),
+    point(18, 2),
+  ],
+  backEnemySpawns: [
+    point(-8, -6),
+    point(6, 0),
+    point(0, -28),
+    point(-18, -48),
+    point(-6, -40),
+    point(-14, -56),
+  ],
+});
+
+const FROZEN_FANG_TUNDRA = createArea({
+  id: "frozen-fang-tundra",
+  label: "Frozen Fang Tundra",
+  description: "Icy ruins, frozen bridges, and a storm-bitten citadel await ahead.",
+  keyHint: "Cross the rune shelf and claim the frost seal from the far ridge.",
+  gateHint: "Carry the seal to the frozen gate and unlock the last stretch.",
+  clearHint: "Break the final ambush at the citadel, then enter the aurora portal.",
+  rewardText: "Frozen Fang Tundra cleared. The blizzard parts around the portal.",
+  theme: {
+    biome: "frozen",
+    sky: "#9fd4ff",
+    fog: "#eff8ff",
+    sun: "#f6fcff",
+    sunIntensity: 1.22,
+    hemiIntensity: 1.08,
+    fogNear: 38,
+    fogFar: 145,
+    grass: "#b0d9f3",
+    grassDark: "#6c97b4",
+    sand: "#eaf5ff",
+    cliff: "#83a8c4",
+    cliffDark: "#49677f",
+    stone: "#c2d6e6",
+    stoneDark: "#6f879d",
+    wood: "#7f6a56",
+    woodDark: "#4a3b2f",
+    metal: "#d9ebff",
+    metalDark: "#6d89a7",
+    ice: "#9be7ff",
+    iceDark: "#5592b1",
+    water: "#8edaff",
+    waterOpacity: 0.76,
+    shimmerOpacity: 0.16,
+    portal: "#dbf7ff",
+    crystal: "#bdf8ff",
+    gate: "#dff1ff",
+    enemy: "#d48cff",
+    enemyDark: "#60308d",
+    backdropSurfaceType: "ice",
+  },
+  layout: createLayout({
+    start: point(0, 46),
+    key: point(-12, 16),
+    gate: point(0, 6),
+    exit: point(0, -52),
+    frontZones: [
+      zone(-20, 20, 36, 54, "ice", 6.1, "island"),
+      zone(-6, 6, 20, 38, "ice", 3.6, "bridge"),
+      zone(-18, 18, 6, 24, "ice", 6.4, "island"),
+      zone(-22, -10, -4, 10, "ice", 3.6, "bridge"),
+      zone(-36, -16, -18, 4, "ice", 6, "island"),
+    ],
+    backZones: [
+      zone(-10, 10, -22, 6, "ice", 6.3, "island"),
+      zone(-4, 4, -40, -20, "ice", 3.7, "bridge"),
+      zone(-22, 22, -64, -38, "ice", 6.8, "island"),
+    ],
+    gateZone: zone(-4, 4, 0, 12, "ice", 3.8, "bridge"),
+  }),
+  enemyHealth: 94,
+  enemyDamage: 14,
+  enemySpeed: 5.5,
+  enemyAggroRange: 20,
+  enemyAttackRange: 2.55,
+  frontEnemySpawns: [
+    point(0, 48),
+    point(10, 40),
+    point(-8, 14),
+    point(-18, 4),
+    point(-27, -8),
+    point(-20, -13),
+  ],
+  backEnemySpawns: [
+    point(-6, -6),
+    point(6, 2),
+    point(0, -28),
+    point(-12, -50),
+    point(12, -46),
+    point(16, -58),
+  ],
+});
+
+const AREAS = Object.freeze([
+  CRYSTAL_CAVERNS,
+  VOLCANO_VALLEY,
+  SKY_PIRATE_FORTRESS,
+  HAUNTED_CLOCKTOWER,
+  FROZEN_FANG_TUNDRA,
+]);
+
+export const TOTAL_AREAS = AREAS.length;
 
 export function getAreaConfig(areaIndex) {
-  const stage = areaIndex + 1;
-  const theme = LEVEL_THEMES[areaIndex % LEVEL_THEMES.length];
-  const layout = buildLayoutForStage(areaIndex);
-  const spawnPools = createSpawnPools(layout);
-  const frontCount = Math.min(spawnPools.front.length, 2 + Math.floor((stage - 1) / 8));
-  const backCount = Math.min(spawnPools.back.length, 2 + Math.floor((stage + 3) / 8));
-
-  return {
-    label: createAreaLabel(stage, theme),
-    theme,
-    layout,
-    enemyHealth: Math.round(46 + stage * 3.2 + Math.floor(stage / 5) * 1.5),
-    enemyDamage: 10 + Math.floor(stage / 4),
-    enemySpeed: 4.7 + Math.min(2.8, stage * 0.03),
-    enemyAggroRange: 18 + Math.min(6, Math.floor(stage / 18)),
-    enemyAttackRange: 2.4 + Math.min(0.7, stage * 0.005),
-    frontEnemySpawns: spawnPools.front.slice(0, frontCount),
-    backEnemySpawns: spawnPools.back.slice(0, backCount),
-    rewardText: `Island ${stage} cleared. Press Enter for the next island.`,
-  };
+  return AREAS[Math.max(0, Math.min(areaIndex, AREAS.length - 1))];
 }

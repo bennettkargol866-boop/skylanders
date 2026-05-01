@@ -18,7 +18,76 @@ import {
 } from "./entities.js";
 
 const WORLD_Y = 1.1;
-const SAVE_KEY = "skylanders_arena_save_v3";
+const SAVE_KEY = "skylanders_arena_save_v4";
+const LEGACY_SAVE_KEY = "skylanders_arena_save_v3";
+const SAVE_SLOT_IDS = Object.freeze(["slot-1", "slot-2", "slot-3"]);
+const GOOFY_MUSIC_BPM = 132;
+const GOOFY_MELODY = Object.freeze([
+  { note: "C5", beats: 0.5 },
+  { note: "E5", beats: 0.5 },
+  { note: "G5", beats: 0.5 },
+  { note: "A5", beats: 0.5 },
+  { note: "G5", beats: 0.5 },
+  { note: "E5", beats: 0.5 },
+  { note: "D5", beats: 0.5 },
+  { note: "G4", beats: 0.5 },
+  { note: "C5", beats: 0.75 },
+  { note: "rest", beats: 0.25 },
+  { note: "E5", beats: 0.5 },
+  { note: "F5", beats: 0.5 },
+  { note: "G5", beats: 0.5 },
+  { note: "rest", beats: 0.25 },
+  { note: "C6", beats: 0.25 },
+  { note: "B5", beats: 0.5 },
+  { note: "G5", beats: 0.5 },
+  { note: "E5", beats: 0.5 },
+  { note: "C5", beats: 0.5 },
+]);
+const NOTE_FREQUENCIES = Object.freeze({
+  C3: 130.81,
+  F3: 174.61,
+  G3: 196,
+  C4: 261.63,
+  E4: 329.63,
+  G4: 392,
+  C5: 523.25,
+  D5: 587.33,
+  E5: 659.25,
+  F5: 698.46,
+  G5: 783.99,
+  A5: 880,
+  B5: 987.77,
+  C6: 1046.5,
+});
+
+function createDefaultProgress() {
+  return {
+    coins: 0,
+    unlockedCharacters: ["dragon"],
+    bestArea: 0,
+    lastCharacterId: "dragon",
+    lastLevelIndex: 0,
+    hasStarted: false,
+  };
+}
+
+function normalizeProgress(progress) {
+  const fallback = createDefaultProgress();
+  const unlockedCharacters = Array.isArray(progress?.unlockedCharacters)
+    ? progress.unlockedCharacters.filter((value) => CHARACTER_DEFS[value])
+    : fallback.unlockedCharacters;
+
+  return {
+    coins: Number.isFinite(progress?.coins) ? progress.coins : fallback.coins,
+    unlockedCharacters: unlockedCharacters.length ? unlockedCharacters : fallback.unlockedCharacters,
+    bestArea: Number.isFinite(progress?.bestArea) ? clamp(progress.bestArea, 0, TOTAL_AREAS) : fallback.bestArea,
+    lastCharacterId: CHARACTER_DEFS[progress?.lastCharacterId] ? progress.lastCharacterId : fallback.lastCharacterId,
+    lastLevelIndex: Number.isFinite(progress?.lastLevelIndex)
+      ? clamp(progress.lastLevelIndex, 0, TOTAL_AREAS - 1)
+      : fallback.lastLevelIndex,
+    hasStarted: Boolean(progress?.hasStarted),
+  };
+}
 
 function makeMaterial(color, options = {}) {
   return new THREE.MeshStandardMaterial({
@@ -85,7 +154,7 @@ export class Game {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(50, VIEWPORT.width / VIEWPORT.height, 0.1, 220);
-    this.camera.position.set(-18, 22, 24);
+    this.camera.position.set(0, 24, 28);
     this.cameraTarget = new THREE.Vector3();
 
     this.sceneRoot = new THREE.Group();
@@ -135,8 +204,12 @@ export class Game {
     this.state = "menu";
     this.time = 0;
     this.lastFrame = 0;
-    this.progress = this.loadProgress();
+    this.saveState = this.loadSaveState();
+    this.activeSlotId = this.saveState.activeSlotId;
+    this.progress = this.getProgressForSlot(this.activeSlotId);
     this.areaIndex = 0;
+    this.runStartAreaIndex = 0;
+    this.selectedLevelIndex = this.progress.lastLevelIndex ?? 0;
     this.currentLevel = null;
     this.selectedCharacter = null;
     this.player = null;
@@ -145,7 +218,14 @@ export class Game {
     this.projectiles = [];
     this.coinPickups = [];
     this.enemyMeshes = new Map();
+    this.enemyTelegraphs = new Map();
     this.pendingButtonAction = null;
+    this.audioContext = null;
+    this.musicGain = null;
+    this.musicTimer = null;
+    this.musicStarted = false;
+    this.musicStep = 0;
+    this.musicNextTime = 0;
 
     this.playerVisual = null;
     this.attackPreview = null;
@@ -155,7 +235,7 @@ export class Game {
     this.gateOpen = false;
     this.exitActive = false;
     this.backWaveSpawned = false;
-    this.currentStatusText = "Select a hero to begin";
+    this.currentStatusText = "Choose Start Game, Continue Game, or a save slot.";
     this.keyStatusText = "Missing";
 
     this.handleFrame = this.handleFrame.bind(this);
@@ -166,17 +246,94 @@ export class Game {
 
   init() {
     this.showMenu();
+    this.bindInterface();
     this.handleResize();
     window.addEventListener("resize", this.handleResize);
     window.requestAnimationFrame(this.handleFrame);
   }
 
-  loadProgress() {
+  bindInterface() {
+    const toggle = () => this.toggleFullscreen();
+    this.ui.overlayFullscreen?.addEventListener("click", toggle);
+    this.ui.frameFullscreen?.addEventListener("click", toggle);
+    document.addEventListener("fullscreenchange", () => {
+      this.updateFullscreenUi();
+      window.requestAnimationFrame(this.handleResize);
+    });
+    window.addEventListener("pointerdown", () => this.startBackgroundMusic(), { once: true });
+    window.addEventListener("keydown", () => this.startBackgroundMusic(), { once: true });
+    this.updateFullscreenUi();
+  }
+
+  startBackgroundMusic() {
+    if (this.musicStarted || typeof window === "undefined") {
+      return;
+    }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) {
+      return;
+    }
+
+    this.audioContext = new AudioContextClass();
+    this.musicGain = this.audioContext.createGain();
+    this.musicGain.gain.value = 0.045;
+    this.musicGain.connect(this.audioContext.destination);
+    this.musicStarted = true;
+    this.musicNextTime = this.audioContext.currentTime + 0.04;
+    this.musicTimer = window.setInterval(() => this.scheduleBackgroundMusic(), 120);
+    this.scheduleBackgroundMusic();
+  }
+
+  scheduleBackgroundMusic() {
+    if (!this.audioContext || !this.musicGain) {
+      return;
+    }
+
+    const beat = 60 / GOOFY_MUSIC_BPM;
+    while (this.musicNextTime < this.audioContext.currentTime + 0.9) {
+      const melody = GOOFY_MELODY[this.musicStep % GOOFY_MELODY.length];
+      const barStep = this.musicStep % 8;
+      const bassNote = barStep < 4 ? "C3" : barStep < 6 ? "F3" : "G3";
+
+      this.playSynthNote(bassNote, this.musicNextTime, beat * 0.42, "triangle", 0.55);
+      if (barStep % 2 === 1) {
+        this.playSynthNote(barStep < 4 ? "E4" : "C4", this.musicNextTime, beat * 0.22, "square", 0.22);
+      }
+
+      if (melody.note !== "rest") {
+        this.playSynthNote(melody.note, this.musicNextTime, beat * melody.beats * 0.72, "square", 0.5);
+      }
+
+      this.musicNextTime += beat * melody.beats;
+      this.musicStep += 1;
+    }
+  }
+
+  playSynthNote(note, startTime, duration, type, volume) {
+    const frequency = NOTE_FREQUENCIES[note];
+    if (!frequency || !this.audioContext || !this.musicGain) {
+      return;
+    }
+
+    const oscillator = this.audioContext.createOscillator();
+    const gain = this.audioContext.createGain();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, startTime);
+    oscillator.frequency.exponentialRampToValueAtTime(frequency * 1.012, startTime + Math.min(duration, 0.12));
+    gain.gain.setValueAtTime(0.0001, startTime);
+    gain.gain.exponentialRampToValueAtTime(volume, startTime + 0.018);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+    oscillator.connect(gain);
+    gain.connect(this.musicGain);
+    oscillator.start(startTime);
+    oscillator.stop(startTime + duration + 0.03);
+  }
+
+  loadSaveState() {
     const fallback = {
-      coins: 0,
-      unlockedCharacters: ["dragon"],
-      bestArea: 0,
-      lastCharacterId: "dragon",
+      activeSlotId: SAVE_SLOT_IDS[0],
+      slots: Object.fromEntries(SAVE_SLOT_IDS.map((slotId) => [slotId, createDefaultProgress()])),
     };
 
     if (typeof window === "undefined" || !window.localStorage) {
@@ -185,24 +342,43 @@ export class Game {
 
     try {
       const raw = window.localStorage.getItem(SAVE_KEY);
-      if (!raw) {
-        return fallback;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const slots = {};
+        for (const slotId of SAVE_SLOT_IDS) {
+          slots[slotId] = normalizeProgress(parsed?.slots?.[slotId]);
+        }
+
+        return {
+          activeSlotId: SAVE_SLOT_IDS.includes(parsed?.activeSlotId) ? parsed.activeSlotId : SAVE_SLOT_IDS[0],
+          slots,
+        };
       }
 
-      const parsed = JSON.parse(raw);
-      return {
-        coins: Number.isFinite(parsed.coins) ? parsed.coins : fallback.coins,
-        unlockedCharacters: Array.isArray(parsed.unlockedCharacters)
-          ? parsed.unlockedCharacters.filter((value) => CHARACTER_DEFS[value])
-          : fallback.unlockedCharacters,
-        bestArea: Number.isFinite(parsed.bestArea) ? parsed.bestArea : fallback.bestArea,
-        lastCharacterId: CHARACTER_DEFS[parsed.lastCharacterId]
-          ? parsed.lastCharacterId
-          : fallback.lastCharacterId,
-      };
+      const legacyRaw = window.localStorage.getItem(LEGACY_SAVE_KEY);
+      if (legacyRaw) {
+        const legacyProgress = normalizeProgress(JSON.parse(legacyRaw));
+        return {
+          activeSlotId: SAVE_SLOT_IDS[0],
+          slots: {
+            [SAVE_SLOT_IDS[0]]: legacyProgress,
+            [SAVE_SLOT_IDS[1]]: createDefaultProgress(),
+            [SAVE_SLOT_IDS[2]]: createDefaultProgress(),
+          },
+        };
+      }
     } catch {
       return fallback;
     }
+
+    return fallback;
+  }
+
+  getProgressForSlot(slotId) {
+    if (!this.saveState.slots[slotId]) {
+      this.saveState.slots[slotId] = createDefaultProgress();
+    }
+    return this.saveState.slots[slotId];
   }
 
   saveProgress() {
@@ -210,7 +386,29 @@ export class Game {
       return;
     }
 
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(this.progress));
+    this.saveState.activeSlotId = this.activeSlotId;
+    this.saveState.slots[this.activeSlotId] = normalizeProgress(this.progress);
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(this.saveState));
+  }
+
+  setActiveSaveSlot(slotId) {
+    if (!SAVE_SLOT_IDS.includes(slotId)) {
+      return;
+    }
+
+    this.activeSlotId = slotId;
+    this.progress = this.getProgressForSlot(slotId);
+    this.selectedLevelIndex = this.progress.lastLevelIndex ?? 0;
+    this.currentStatusText = `Active save file: ${slotId.replace("slot-", "File ")}.`;
+    this.saveProgress();
+  }
+
+  canContinueGame() {
+    return this.progress.hasStarted;
+  }
+
+  getUnlockedLevelCount() {
+    return clamp(this.progress.bestArea + 1, 1, TOTAL_AREAS);
   }
 
   isCharacterUnlocked(characterId) {
@@ -225,7 +423,6 @@ export class Game {
     const character = CHARACTER_DEFS[characterId];
     if (!character || this.progress.coins < character.cost) {
       this.currentStatusText = `${character?.name ?? "That hero"} costs ${character?.cost ?? 0} coins.`;
-      this.showMenu();
       return false;
     }
 
@@ -234,7 +431,6 @@ export class Game {
     this.progress.lastCharacterId = characterId;
     this.currentStatusText = `${character.name} unlocked. Progress auto-saved.`;
     this.saveProgress();
-    this.showMenu();
     return true;
   }
 
@@ -384,6 +580,22 @@ export class Game {
     return aimDirection.x || aimDirection.z ? aimDirection : null;
   }
 
+  getMovementBasis() {
+    const forward = normalizeVector(
+      this.cameraTarget.x - this.camera.position.x,
+      this.cameraTarget.z - this.camera.position.z
+    );
+    const safeForward = forward.x || forward.z ? forward : { x: 0, z: -1 };
+
+    return {
+      forward: safeForward,
+      right: {
+        x: -safeForward.z,
+        z: safeForward.x,
+      },
+    };
+  }
+
   handleResize() {
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width || VIEWPORT.width));
@@ -393,22 +605,59 @@ export class Game {
     this.camera.updateProjectionMatrix();
   }
 
-  startRun(characterId) {
+  async toggleFullscreen() {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await this.ui.canvasFrame?.requestFullscreen?.();
+      }
+    } catch {
+      this.currentStatusText = "Fullscreen mode is not available here.";
+    }
+    this.updateFullscreenUi();
+  }
+
+  updateFullscreenUi() {
+    const fullscreenText =
+      typeof document !== "undefined" && document.fullscreenElement ? "Exit Fullscreen" : "Fullscreen";
+
+    if (this.ui.overlayFullscreen) {
+      this.ui.overlayFullscreen.textContent = fullscreenText;
+    }
+
+    if (this.ui.frameFullscreen) {
+      this.ui.frameFullscreen.textContent = fullscreenText;
+    }
+  }
+
+  startRun(characterId, levelIndex = this.selectedLevelIndex ?? this.progress.lastLevelIndex ?? 0) {
     if (!this.isCharacterUnlocked(characterId)) {
       return;
     }
 
     this.selectedCharacter = CHARACTER_DEFS[characterId];
     this.progress.lastCharacterId = characterId;
+    this.selectedLevelIndex = clamp(levelIndex, 0, TOTAL_AREAS - 1);
+    this.progress.lastLevelIndex = this.selectedLevelIndex;
+    this.progress.hasStarted = true;
+    this.runStartAreaIndex = this.selectedLevelIndex;
     this.saveProgress();
     this.player = new Player(this.selectedCharacter);
-    this.areaIndex = 0;
+    this.areaIndex = this.selectedLevelIndex;
     this.time = 0;
     this.startArea();
   }
 
   startArea() {
     this.currentLevel = getAreaConfig(this.areaIndex);
+    this.progress.lastLevelIndex = this.areaIndex;
+    this.progress.hasStarted = true;
+    this.saveProgress();
     this.resetAreaState();
     this.buildLevelScene();
     this.spawnPlayerVisual();
@@ -416,7 +665,7 @@ export class Game {
 
     const { start } = this.currentLevel.layout;
     this.player.place(start.x, start.z);
-    if (this.areaIndex === 0) {
+    if (this.areaIndex === this.runStartAreaIndex) {
       this.player.restoreFull();
     } else {
       this.player.heal(22);
@@ -439,6 +688,7 @@ export class Game {
     this.projectiles = [];
     this.coinPickups = [];
     this.enemyMeshes.clear();
+    this.enemyTelegraphs.clear();
     this.clearGroup(this.levelGroup);
     this.clearGroup(this.characterGroup);
     this.clearGroup(this.effectsGroup);
@@ -469,19 +719,29 @@ export class Game {
       this.spawnEnemy(spawn, "back");
     }
 
+    if (this.areaIndex === 2 || this.areaIndex === 4) {
+      this.spawnBoss();
+    }
+
     this.backWaveSpawned = true;
   }
 
   spawnEnemy(spawn, side) {
-    const spawnPoint = this.findEnemySpawnPosition(spawn, side, 1);
+    const radius = spawn.boss ? 2.15 : 1;
+    const spawnPoint = this.findEnemySpawnPosition(spawn, side, radius);
     const enemy = new Enemy({
       x: spawnPoint.x,
       z: spawnPoint.z,
-      health: this.currentLevel.enemyHealth,
-      speed: this.currentLevel.enemySpeed,
-      damage: this.currentLevel.enemyDamage,
-      attackRange: this.currentLevel.enemyAttackRange,
-      aggroRange: this.currentLevel.enemyAggroRange,
+      health: spawn.health ?? this.currentLevel.enemyHealth,
+      speed: spawn.speed ?? this.currentLevel.enemySpeed,
+      damage: spawn.damage ?? this.currentLevel.enemyDamage,
+      attackRange: spawn.attackRange ?? this.currentLevel.enemyAttackRange,
+      aggroRange: spawn.aggroRange ?? this.currentLevel.enemyAggroRange,
+      radius,
+      boss: Boolean(spawn.boss),
+      attackCooldown: spawn.attackCooldown ?? 1,
+      windupDuration: spawn.windupDuration ?? 0.2,
+      slamRadius: spawn.slamRadius ?? 0,
       side,
     });
 
@@ -489,104 +749,316 @@ export class Game {
     const mesh = this.buildEnemyModel(enemy);
     this.enemyMeshes.set(enemy.id, mesh);
     this.characterGroup.add(mesh);
+    if (enemy.boss) {
+      const telegraph = this.createBossTelegraph(enemy);
+      telegraph.visible = false;
+      this.enemyTelegraphs.set(enemy.id, telegraph);
+      this.effectsGroup.add(telegraph);
+    }
+  }
+
+  spawnBoss() {
+    const bossSpawn = {
+      x: this.currentLevel.layout.exit.x,
+      z: this.currentLevel.layout.exit.z + 8,
+      boss: true,
+      health: this.currentLevel.enemyHealth * (this.areaIndex === 4 ? 6 : 4.6),
+      speed: this.currentLevel.enemySpeed * 0.62,
+      damage: this.currentLevel.enemyDamage * (this.areaIndex === 4 ? 2.2 : 1.8),
+      attackRange: this.areaIndex === 4 ? 5.4 : 4.8,
+      aggroRange: 34,
+      attackCooldown: this.areaIndex === 4 ? 2.2 : 2.5,
+      windupDuration: this.areaIndex === 4 ? 1.05 : 1.15,
+      slamRadius: this.areaIndex === 4 ? 4.8 : 4.25,
+    };
+    this.spawnEnemy(bossSpawn, "back");
   }
 
   showMenu() {
+    this.showMainMenu();
+  }
+
+  showMainMenu() {
     this.state = "menu";
-    if (!this.currentStatusText || this.currentStatusText === "Select a hero to begin") {
-      this.currentStatusText = "Choose a hero to enter the floating islands.";
-    }
     this.keyStatusText = "Missing";
-    this.pendingButtonAction = null;
-    populateCharacterButtons(this.ui.characterGrid, {
-      progress: this.progress,
-      onPlay: (characterId) => this.startRun(characterId),
-      onUnlock: (characterId) => this.unlockCharacter(characterId),
-    });
-    this.showOverlay({
+    this.player = null;
+    this.selectedCharacter = null;
+    this.enemies = [];
+    this.pulses = [];
+    this.projectiles = [];
+    this.coinPickups = [];
+    this.enemyMeshes.clear();
+    this.enemyTelegraphs.clear();
+    this.clearGroup(this.characterGroup);
+    this.clearGroup(this.effectsGroup);
+    if (!this.currentStatusText || this.currentStatusText === "Choose Start Game, Continue Game, or a save slot.") {
+      this.currentStatusText = "Choose Start Game, Continue Game, or a save slot.";
+    }
+
+    this.showOverlayFrame({
       kicker: "Sky Gate",
-      title: "Choose a Hero",
-      text: `Coins: ${this.progress.coins}. Clear the front half, find the key, unlock the gate, and use coin drops to unlock more heroes. Progress auto-saves locally.`,
-      showCharacters: true,
-      actionLabel: null,
+      title: "Main Menu",
+      text: "Start a new run by picking a level, continue from your save, or swap to another save file.",
+      meta: [
+        { label: "Active Save", value: this.activeSlotId.replace("slot-", "File ") },
+        { label: "Coins", value: String(this.progress.coins) },
+        { label: "Unlocked Heroes", value: String(this.progress.unlockedCharacters.length) },
+        { label: "Unlocked Levels", value: `${this.getUnlockedLevelCount()} / ${TOTAL_AREAS}` },
+      ],
     });
+
+    populateActionButtons(this.ui.menuGrid, [
+      {
+        label: "Start Game",
+        meta: "New Run",
+        description: "Choose a level, then pick one of the ten heroes.",
+        onClick: () => this.showLevelSelect(),
+      },
+      {
+        label: "Continue Game",
+        meta: this.canContinueGame() ? "Resume Run" : "No Saved Run",
+        description: this.canContinueGame()
+          ? `Resume from ${getAreaConfig(this.progress.lastLevelIndex).label}.`
+          : "Start a run first to enable continue.",
+        disabled: !this.canContinueGame(),
+        onClick: () => this.continueGame(),
+      },
+      {
+        label: "Select Save File",
+        meta: "3 Slots",
+        description: "Switch between three local save files.",
+        onClick: () => this.showSaveSlotMenu(),
+      },
+    ]);
+    this.ui.menuGrid.classList.remove("hidden");
     this.updateUi();
   }
 
+  showSaveSlotMenu() {
+    this.state = "menu";
+    this.showOverlayFrame({
+      kicker: "Save Files",
+      title: "Select Save File",
+      text: "Each save file keeps its own coins, unlocked heroes, and unlocked levels.",
+      backLabel: "Back",
+      backAction: () => this.showMainMenu(),
+    });
+
+    populateSaveSlotButtons(this.ui.saveGrid, SAVE_SLOT_IDS.map((slotId) => {
+      const progress = this.getProgressForSlot(slotId);
+      return {
+        slotId,
+        active: slotId === this.activeSlotId,
+        title: slotId.replace("slot-", "File "),
+        meta: progress.hasStarted ? "Used" : "Empty",
+        description: `Coins ${progress.coins} • Heroes ${progress.unlockedCharacters.length} • Levels ${clamp(
+          progress.bestArea + 1,
+          1,
+          TOTAL_AREAS
+        )}/${TOTAL_AREAS}`,
+        onClick: () => {
+          this.setActiveSaveSlot(slotId);
+          this.showMainMenu();
+        },
+      };
+    }));
+    this.ui.saveGrid.classList.remove("hidden");
+  }
+
+  showLevelSelect() {
+    this.state = "menu";
+    const unlockedLevelCount = this.getUnlockedLevelCount();
+
+    this.showOverlayFrame({
+      kicker: "Realm Select",
+      title: "Choose a Level",
+      text: "Pick an unlocked realm first, then choose which hero you want to bring into it.",
+      meta: [
+        { label: "Save File", value: this.activeSlotId.replace("slot-", "File ") },
+        { label: "Unlocked Levels", value: `${unlockedLevelCount} / ${TOTAL_AREAS}` },
+      ],
+      backLabel: "Back",
+      backAction: () => this.showMainMenu(),
+    });
+
+    const levels = [];
+    for (let index = 0; index < TOTAL_AREAS; index += 1) {
+      const level = getAreaConfig(index);
+      const unlocked = index < unlockedLevelCount;
+      levels.push({
+        label: level.label,
+        meta: unlocked ? `Level ${index + 1}` : "Locked",
+        description: level.description,
+        selected: index === this.selectedLevelIndex,
+        locked: !unlocked,
+        onClick: () => {
+          if (!unlocked) {
+            return;
+          }
+          this.selectedLevelIndex = index;
+          this.showCharacterSelect(index);
+        },
+      });
+    }
+
+    populateLevelButtons(this.ui.levelGrid, levels);
+    this.ui.levelGrid.classList.remove("hidden");
+  }
+
+  showCharacterSelect(levelIndex = this.selectedLevelIndex ?? 0) {
+    this.state = "menu";
+    this.selectedLevelIndex = clamp(levelIndex, 0, TOTAL_AREAS - 1);
+    const level = getAreaConfig(this.selectedLevelIndex);
+
+    this.showOverlayFrame({
+      kicker: "Hero Select",
+      title: `Choose a Hero for ${level.label}`,
+      text: `Pick from ten heroes. Every hero has its own basic and special attack. Coins available: ${this.progress.coins}.`,
+      meta: [
+        { label: "Selected Level", value: level.label },
+        { label: "Last Hero", value: CHARACTER_DEFS[this.progress.lastCharacterId]?.name ?? "None" },
+      ],
+      backLabel: "Levels",
+      backAction: () => this.showLevelSelect(),
+    });
+
+    populateCharacterButtons(this.ui.characterGrid, {
+      progress: this.progress,
+      onPlay: (characterId) => this.startRun(characterId, this.selectedLevelIndex),
+      onUnlock: (characterId) => {
+        this.unlockCharacter(characterId);
+        this.showCharacterSelect(this.selectedLevelIndex);
+      },
+    });
+    this.ui.characterGrid.classList.remove("hidden");
+  }
+
+  continueGame() {
+    if (!this.canContinueGame()) {
+      this.currentStatusText = "No saved run yet. Choose Start Game first.";
+      this.showMainMenu();
+      return;
+    }
+
+    this.startRun(this.progress.lastCharacterId, this.progress.lastLevelIndex);
+  }
+
   showClearScreen() {
-    const reward = this.applyAreaReward();
+    const heroReward = this.applyAreaReward();
+    const areaReward = this.currentLevel.rewardText ?? `${this.currentLevel.label} cleared.`;
+    const summary = `${areaReward} ${heroReward}`;
     this.progress.bestArea = Math.max(this.progress.bestArea, this.areaIndex + 1);
     this.saveProgress();
     const isFinalArea = this.areaIndex >= TOTAL_AREAS - 1;
 
     if (isFinalArea) {
       this.state = "victory";
-      this.currentStatusText = reward;
-      this.showOverlay({
+      this.currentStatusText = summary;
+      this.showOverlayFrame({
         kicker: "Victory",
         title: "Portal Complete",
-        text: `${reward} You cleared all ${TOTAL_AREAS} island gates. Press the button or Enter to run it again.`,
-        showCharacters: false,
+        text: `${summary} You cleared all ${TOTAL_AREAS} realms. Press the button or Enter to run it again.`,
         actionLabel: "Play Again",
-        action: () => this.startRun(this.selectedCharacter.id),
+        action: () => this.startRun(this.selectedCharacter.id, this.runStartAreaIndex),
+        backLabel: "Main Menu",
+        backAction: () => this.showMainMenu(),
       });
       return;
     }
 
     this.state = "clear";
-    this.currentStatusText = reward;
-    this.showOverlay({
+    this.currentStatusText = summary;
+    this.showOverlayFrame({
       kicker: "Gate Cleared",
       title: "Next Island Unlocked",
-      text: `${reward} Press the button or Enter to fly to the next area.`,
-      showCharacters: false,
+      text: `${summary} Press the button or Enter to fly to the next area.`,
       actionLabel: "Next Area",
       action: () => {
         this.areaIndex += 1;
         this.startArea();
       },
+      backLabel: "Main Menu",
+      backAction: () => this.showMainMenu(),
     });
   }
 
   applyAreaReward() {
-    if (this.selectedCharacter.id === "dragon") {
-      this.player.basicAttack.damage += 1;
-      this.player.speed += 0.03;
-      return "Dragon reward: +1 basic damage and +0.03 movement speed.";
+    const reward = this.selectedCharacter.areaReward ?? {};
+
+    if (reward.basicDamage) {
+      this.player.basicAttack.damage += reward.basicDamage;
     }
 
-    if (this.selectedCharacter.id === "reef") {
-      this.player.maxHealth += 2;
-      this.player.special.damage += 1;
-      this.player.heal(8);
-      return "Lagoon reward: +2 max health and +1 special damage.";
+    if (reward.specialDamage) {
+      this.player.special.damage += reward.specialDamage;
     }
 
-    this.player.maxHealth += 3;
-    this.player.special.damage += 1;
-    this.player.heal(10);
-    return "Magma reward: +3 max health and +1 special damage.";
+    if (reward.maxHealth) {
+      this.player.maxHealth += reward.maxHealth;
+    }
+
+    if (reward.speed) {
+      this.player.speed += reward.speed;
+    }
+
+    if (reward.heal) {
+      this.player.heal(reward.heal);
+    }
+
+    return this.selectedCharacter.rewardText ?? "Your hero grows stronger.";
   }
 
   showDefeatScreen() {
     this.state = "defeat";
     this.currentStatusText = "The island repelled your hero.";
-    this.showOverlay({
+    this.showOverlayFrame({
       kicker: "Defeat",
       title: "The Gate Stays Shut",
       text: "Press R or use the button below to restart the current run with the same hero.",
-      showCharacters: false,
       actionLabel: "Restart Run",
-      action: () => this.startRun(this.selectedCharacter.id),
+      action: () => this.startRun(this.selectedCharacter.id, this.runStartAreaIndex),
+      backLabel: "Main Menu",
+      backAction: () => this.showMainMenu(),
     });
   }
 
-  showOverlay({ kicker, title, text, showCharacters, actionLabel, action }) {
+  resetOverlayPanels() {
+    for (const panel of [this.ui.menuGrid, this.ui.saveGrid, this.ui.levelGrid, this.ui.characterGrid]) {
+      panel.innerHTML = "";
+      panel.classList.add("hidden");
+    }
+    this.ui.overlayMeta.innerHTML = "";
+    this.ui.overlayMeta.classList.add("hidden");
+  }
+
+  populateOverlayMeta(meta) {
+    if (!meta?.length) {
+      this.ui.overlayMeta.classList.add("hidden");
+      this.ui.overlayMeta.innerHTML = "";
+      return;
+    }
+
+    this.ui.overlayMeta.innerHTML = meta
+      .map(
+        (item) => `
+          <div class="overlay-meta-item">
+            <span>${item.label}</span>
+            <strong>${item.value}</strong>
+          </div>
+        `
+      )
+      .join("");
+    this.ui.overlayMeta.classList.remove("hidden");
+  }
+
+  showOverlayFrame({ kicker, title, text, actionLabel, action, backLabel, backAction, meta = [] }) {
     this.ui.overlay.classList.add("is-visible");
     this.ui.overlayKicker.textContent = kicker;
     this.ui.overlayTitle.textContent = title;
     this.ui.overlayText.textContent = text;
-    this.ui.characterGrid.classList.toggle("hidden", !showCharacters);
+    this.resetOverlayPanels();
+    this.populateOverlayMeta(meta);
+    this.updateFullscreenUi();
 
     if (actionLabel && action) {
       this.pendingButtonAction = action;
@@ -598,11 +1070,25 @@ export class Game {
       this.ui.overlayAction.classList.add("hidden");
       this.ui.overlayAction.onclick = null;
     }
+
+    if (backLabel && backAction) {
+      this.ui.overlayBack.textContent = backLabel;
+      this.ui.overlayBack.classList.remove("hidden");
+      this.ui.overlayBack.onclick = backAction;
+    } else {
+      this.ui.overlayBack.classList.add("hidden");
+      this.ui.overlayBack.onclick = null;
+    }
+
+    this.updateUi();
   }
 
   hideOverlay() {
     this.pendingButtonAction = null;
     this.ui.overlay.classList.remove("is-visible");
+    this.resetOverlayPanels();
+    this.ui.overlayBack.classList.add("hidden");
+    this.ui.overlayBack.onclick = null;
     this.ui.overlayAction.classList.add("hidden");
     this.ui.overlayAction.onclick = null;
   }
@@ -724,7 +1210,12 @@ export class Game {
       if (mesh) {
         this.characterGroup.remove(mesh);
       }
+      const telegraph = this.enemyTelegraphs.get(enemy.id);
+      if (telegraph) {
+        this.effectsGroup.remove(telegraph);
+      }
       this.enemyMeshes.delete(enemy.id);
+      this.enemyTelegraphs.delete(enemy.id);
       return false;
     });
 
@@ -748,10 +1239,10 @@ export class Game {
   render(dt) {
     this.updateCamera(dt);
     this.refreshMouseAimWorld();
-    this.updateAttackPreview();
     this.updateAimReticle();
     this.updatePlayerVisual(dt);
     this.updateEnemyVisuals(dt);
+    this.updateBossTelegraphs();
     this.updateLevelVisuals(dt);
     this.renderer.render(this.scene, this.camera);
   }
@@ -762,9 +1253,9 @@ export class Game {
       return;
     }
 
-    const targetPosition = new THREE.Vector3(this.player.x - 17, 22 + this.player.y * 0.18, this.player.z + 22);
+    const targetPosition = new THREE.Vector3(this.player.x, 23 + this.player.y * 0.18, this.player.z + 24);
     this.camera.position.lerp(targetPosition, 1 - Math.exp(-dt * 4));
-    this.cameraTarget.set(this.player.x + 5, WORLD_Y + 1.8 + this.player.y * 0.22, this.player.z);
+    this.cameraTarget.set(this.player.x, WORLD_Y + 1.8 + this.player.y * 0.22, this.player.z - 4);
     this.camera.lookAt(this.cameraTarget);
   }
 
@@ -792,21 +1283,21 @@ export class Game {
     }
 
     if (!this.hasKey) {
-      this.currentStatusText = "Find the key on the side platform to unlock the back half.";
+      this.currentStatusText = `${this.currentLevel.label}: ${this.currentLevel.keyHint}`;
       return;
     }
 
     if (!this.gateOpen) {
-      this.currentStatusText = "Take the key to the main gate.";
+      this.currentStatusText = `${this.currentLevel.label}: ${this.currentLevel.gateHint}`;
       return;
     }
 
     if (!this.exitActive) {
-      this.currentStatusText = `Back half unlocked. ${this.enemies.length} enemies remain.`;
+      this.currentStatusText = `${this.currentLevel.label}: ${this.enemies.length} enemies remain in the back half.`;
       return;
     }
 
-    this.currentStatusText = "Portal active. Step into it to clear the area.";
+    this.currentStatusText = `${this.currentLevel.label}: ${this.currentLevel.clearHint}`;
   }
 
   spawnCoinBurst(x, z, count) {
@@ -931,6 +1422,61 @@ export class Game {
     pulse.mesh.material.opacity = alpha * (isArcPulse ? 0.44 : 0.78);
   }
 
+  createBossTelegraph(enemy) {
+    const group = new THREE.Group();
+    const fill = new THREE.Mesh(
+      new THREE.CircleGeometry(enemy.slamRadius, 48),
+      new THREE.MeshBasicMaterial({
+        color: "#ff3b30",
+        transparent: true,
+        opacity: 0.16,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    fill.rotation.x = -Math.PI / 2;
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(enemy.slamRadius * 0.86, enemy.slamRadius, 48),
+      new THREE.MeshBasicMaterial({
+        color: "#ffdb4d",
+        transparent: true,
+        opacity: 0.72,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    group.add(fill, ring);
+    group.renderOrder = 4;
+    group.userData = { fill, ring };
+    return group;
+  }
+
+  updateBossTelegraphs() {
+    for (const enemy of this.enemies) {
+      const telegraph = this.enemyTelegraphs.get(enemy.id);
+      if (!telegraph) {
+        continue;
+      }
+
+      const active = enemy.pendingSlam && this.time < enemy.telegraphUntil;
+      telegraph.visible = active;
+      if (!active) {
+        continue;
+      }
+
+      const progress = clamp(
+        (this.time - enemy.telegraphStartedAt) / Math.max(0.001, enemy.windupDuration),
+        0,
+        1
+      );
+      telegraph.position.set(enemy.telegraphX, WORLD_Y + 0.09, enemy.telegraphZ);
+      telegraph.scale.setScalar(0.7 + progress * 0.3);
+      telegraph.userData.fill.material.opacity = 0.1 + progress * 0.24;
+      telegraph.userData.ring.material.opacity = 0.42 + Math.sin(this.time * 18) * 0.18 + progress * 0.32;
+    }
+  }
+
   spawnAttackPreview() {
     if (this.attackPreview) {
       this.effectsGroup.remove(this.attackPreview);
@@ -941,23 +1487,39 @@ export class Game {
       return;
     }
 
-    const reach = this.player.basicAttack.range + this.player.basicAttack.radius;
-    const thetaLength = THREE.MathUtils.degToRad(this.player.basicAttack.arcDegrees ?? 360);
-    const thetaStart = Math.PI / 2 - thetaLength / 2;
-    const innerRadius = Math.max(this.player.radius * 0.34, reach * 0.08);
-    const material = new THREE.MeshBasicMaterial({
-      color: this.player.basicAttack.color,
-      transparent: true,
-      opacity: 0.16,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
+    const makePreviewArc = (reach, arcDegrees, rotationOffset = 0) => {
+      const thetaLength = THREE.MathUtils.degToRad(arcDegrees ?? 360);
+      const thetaStart = Math.PI / 2 - thetaLength / 2;
+      const innerRadius = Math.max(this.player.radius * 0.34, reach * 0.08);
+      const material = new THREE.MeshBasicMaterial({
+        color: this.player.basicAttack.color,
+        transparent: true,
+        opacity: 0.16,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(new THREE.RingGeometry(innerRadius, reach, 40, 1, thetaStart, thetaLength), material);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.rotation.z = THREE.MathUtils.degToRad(rotationOffset);
+      return mesh;
+    };
 
-    this.attackPreview = new THREE.Mesh(
-      new THREE.RingGeometry(innerRadius, reach, 40, 1, thetaStart, thetaLength),
-      material
-    );
-    this.attackPreview.rotation.x = -Math.PI / 2;
+    const group = new THREE.Group();
+    const attack = this.player.basicAttack;
+    if (attack.pattern === "spin") {
+      group.add(makePreviewArc(attack.radius + attack.range * 0.45, 360));
+    } else if (attack.pattern === "double") {
+      const spread = attack.spreadDegrees ?? 34;
+      const reach = attack.range + attack.radius;
+      group.add(makePreviewArc(reach, attack.arcDegrees ?? 360, -spread / 2));
+      group.add(makePreviewArc(reach, attack.arcDegrees ?? 360, spread / 2));
+    } else if (attack.pattern === "stab") {
+      group.add(makePreviewArc(attack.range + 0.65 + attack.radius * 0.72, attack.arcDegrees ?? 42));
+    } else {
+      group.add(makePreviewArc(attack.range + attack.radius, attack.arcDegrees ?? 360));
+    }
+
+    this.attackPreview = group;
     this.attackPreview.renderOrder = 2;
     this.effectsGroup.add(this.attackPreview);
   }
@@ -1015,8 +1577,12 @@ export class Game {
     const attackDuration = this.player.attackAnimDuration ?? 0.26;
     const attackFocus = Math.max(0, this.player.attackAnimUntil - this.time) / attackDuration;
     this.attackPreview.scale.setScalar(1 + attackFocus * 0.08);
-    this.attackPreview.material.opacity =
-      0.08 + cooldownRatio * 0.08 + attackFocus * 0.16 + (Math.sin(this.time * 5.2) + 1) * 0.015;
+    const opacity = 0.08 + cooldownRatio * 0.08 + attackFocus * 0.16 + (Math.sin(this.time * 5.2) + 1) * 0.015;
+    this.attackPreview.traverse((child) => {
+      if (child.material) {
+        child.material.opacity = opacity;
+      }
+    });
   }
 
   updateAimReticle() {
@@ -1118,11 +1684,18 @@ export class Game {
     }
 
     for (const enemy of this.enemies) {
+      if (projectile.hasHit(enemy.id)) {
+        continue;
+      }
+
       const maxDistance = projectile.radius + enemy.radius;
       if (distanceBetween(projectile, enemy) <= maxDistance) {
         const hitDirection = normalizeVector(enemy.x - projectile.x, enemy.z - projectile.z);
         enemy.takeDamage(projectile.damage, hitDirection, this.time);
-        projectile.alive = false;
+        projectile.markHit(enemy.id);
+        if (projectile.hitTargets.size > projectile.pierce) {
+          projectile.alive = false;
+        }
         break;
       }
     }
@@ -1255,11 +1828,17 @@ export class Game {
   buildLevelScene() {
     const { theme, layout } = this.currentLevel;
     this.scene.background = new THREE.Color(theme.sky);
-    this.scene.fog = new THREE.Fog(theme.fog, 40, 135);
+    this.scene.fog = new THREE.Fog(theme.fog, theme.fogNear ?? 40, theme.fogFar ?? 135);
     this.hemiLight.color.set(theme.fog);
     this.hemiLight.groundColor.set(theme.cliffDark);
+    this.hemiLight.intensity = theme.hemiIntensity ?? 1.15;
+    this.sunLight.color.set(theme.sun ?? "#ffffff");
+    this.sunLight.intensity = theme.sunIntensity ?? 1.4;
 
-    const visuals = {};
+    const visuals = {
+      foamRings: [],
+      rotatingProps: [],
+    };
     this.levelVisuals = visuals;
 
     const water = new THREE.Mesh(
@@ -1271,7 +1850,7 @@ export class Game {
         roughness: 0.2,
         metalness: 0.04,
         transparent: true,
-        opacity: 0.78,
+        opacity: theme.waterOpacity ?? 0.78,
       })
     );
     water.rotation.x = -Math.PI / 2;
@@ -1285,31 +1864,18 @@ export class Game {
       new THREE.MeshBasicMaterial({
         color: theme.fog,
         transparent: true,
-        opacity: 0.14,
+        opacity: theme.shimmerOpacity ?? 0.14,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       })
     );
     waterShimmer.rotation.x = -Math.PI / 2;
     waterShimmer.position.y = 0.22;
+    waterShimmer.userData.baseOpacity = theme.shimmerOpacity ?? 0.14;
     this.levelGroup.add(waterShimmer);
     visuals.waterShimmer = waterShimmer;
 
-    for (const cloud of [
-      { x: -20, y: 18, z: -32, scale: 1.2 },
-      { x: 10, y: 22, z: -40, scale: 1.4 },
-      { x: 32, y: 17, z: -20, scale: 1.05 },
-    ]) {
-      this.levelGroup.add(this.buildCloud(theme, cloud));
-    }
-
-    for (const island of [
-      { x: -6, z: -30, width: 12, depth: 8, scale: 0.9 },
-      { x: 24, z: -32, width: 14, depth: 10, scale: 1 },
-      { x: 55, z: 30, width: 16, depth: 11, scale: 1.05 },
-    ]) {
-      this.levelGroup.add(this.buildBackdropIsland(theme, island));
-    }
+    this.addBackdropScenery(theme);
 
     for (const rect of layout.frontZones) {
       this.levelGroup.add(this.createPlatform(rect, theme, this.getRectPlatformStyle(rect, theme)));
@@ -1332,7 +1898,7 @@ export class Game {
     this.levelGroup.add(keyGroup);
     visuals.keyGroup = keyGroup;
 
-    const gate = this.buildGate(theme, layout.gate);
+    const gate = this.buildGate(theme, layout.gate, layout.gateZone);
     this.levelGroup.add(gate.group);
     visuals.gateBars = gate.bars;
 
@@ -1342,91 +1908,320 @@ export class Game {
     visuals.portalCore = portal.core;
     visuals.portalLight = portal.light;
 
-    visuals.foamRings = [];
-    for (const foam of [
-      { x: 30, z: -20, scale: 1.1, spin: 0.2 },
-      { x: 45, z: 13, scale: 0.95, spin: -0.16 },
-      { x: 57, z: -19, scale: 1.3, spin: 0.12 },
-    ]) {
-      const ring = this.buildFoamRing(foam);
-      visuals.foamRings.push(ring);
-      this.levelGroup.add(ring);
+    this.decorateBiome(theme, layout, visuals);
+  }
+
+  addBackdropScenery(theme) {
+    const cloudSets = {
+      crystal: [
+        { x: -14, y: 15, z: -34, scale: 1.05, opacity: 0.48 },
+        { x: 22, y: 18, z: -40, scale: 1.2, opacity: 0.42 },
+      ],
+      volcano: [
+        { x: -18, y: 16, z: -34, scale: 1.1, opacity: 0.38 },
+        { x: 16, y: 21, z: -42, scale: 1.35, opacity: 0.34 },
+        { x: 38, y: 18, z: -24, scale: 1.1, opacity: 0.3 },
+      ],
+      skyfort: [
+        { x: -24, y: 19, z: -30, scale: 1.35, opacity: 0.78 },
+        { x: 8, y: 23, z: -42, scale: 1.5, opacity: 0.76 },
+        { x: 36, y: 18, z: -18, scale: 1.12, opacity: 0.72 },
+      ],
+      haunted: [
+        { x: -18, y: 17, z: -34, scale: 1.08, opacity: 0.42 },
+        { x: 12, y: 20, z: -38, scale: 1.22, opacity: 0.36 },
+        { x: 36, y: 16, z: -20, scale: 0.96, opacity: 0.32 },
+      ],
+      frozen: [
+        { x: -22, y: 18, z: -34, scale: 1.15, opacity: 0.74 },
+        { x: 10, y: 22, z: -40, scale: 1.3, opacity: 0.72 },
+        { x: 34, y: 18, z: -22, scale: 1.04, opacity: 0.68 },
+      ],
+    };
+
+    const islandSets = {
+      crystal: [
+        { x: -10, z: -31, width: 12, depth: 8, scale: 0.95 },
+        { x: 24, z: -34, width: 15, depth: 10, scale: 1 },
+        { x: 57, z: 29, width: 16, depth: 12, scale: 1.06 },
+      ],
+      volcano: [
+        { x: -8, z: -31, width: 14, depth: 9, scale: 0.94 },
+        { x: 30, z: -34, width: 16, depth: 11, scale: 1.02 },
+        { x: 56, z: 31, width: 17, depth: 11, scale: 1.08 },
+      ],
+      skyfort: [
+        { x: -6, z: -29, width: 11, depth: 8, scale: 0.82 },
+        { x: 24, z: -33, width: 12, depth: 8, scale: 0.86 },
+        { x: 56, z: 28, width: 13, depth: 9, scale: 0.88 },
+      ],
+      haunted: [
+        { x: -9, z: -30, width: 12, depth: 8, scale: 0.9 },
+        { x: 24, z: -33, width: 14, depth: 9, scale: 0.96 },
+        { x: 58, z: 30, width: 16, depth: 11, scale: 1.02 },
+      ],
+      frozen: [
+        { x: -12, z: -31, width: 12, depth: 8, scale: 0.96 },
+        { x: 24, z: -34, width: 15, depth: 10, scale: 1 },
+        { x: 58, z: 30, width: 16, depth: 11, scale: 1.04 },
+      ],
+    };
+
+    for (const cloud of cloudSets[theme.biome] ?? cloudSets.skyfort) {
+      this.levelGroup.add(this.buildCloud(theme, cloud));
     }
 
-    for (const position of [
-      { x: -31, z: -12 },
-      { x: -13, z: 13 },
-      { x: 18, z: -13 },
-      { x: 34, z: 15 },
-      { x: 58, z: 15 },
-    ]) {
-      this.levelGroup.add(this.buildCrystal(theme, position.x, position.z));
+    for (const island of islandSets[theme.biome] ?? islandSets.crystal) {
+      this.levelGroup.add(this.buildBackdropIsland(theme, island));
     }
 
-    for (const tower of [
-      { x: 0.8, z: -4.6 },
-      { x: 0.8, z: 4.6 },
-      { x: 6.2, z: -4.6 },
-      { x: 6.2, z: 4.6 },
-    ]) {
-      this.levelGroup.add(this.buildTorch(theme, tower.x, tower.z));
+    if (theme.biome === "skyfort") {
+      for (const ship of [
+        { x: -30, y: 13, z: -18, scale: 0.9, yaw: -0.32 },
+        { x: 42, y: 16, z: -28, scale: 1.08, yaw: 0.24 },
+      ]) {
+        this.levelGroup.add(this.buildAirship(theme, ship));
+      }
     }
+  }
 
-    for (const palm of [
-      { x: -40, z: -7, scale: 1.1 },
-      { x: -35, z: 10, scale: 0.9 },
-      { x: -2, z: -10, scale: 1.05 },
-      { x: 8, z: 11, scale: 0.88 },
-      { x: 19, z: 14, scale: 0.94 },
-      { x: 25, z: 21, scale: 1.08 },
-      { x: 33, z: 9, scale: 0.98 },
-      { x: 57, z: 12, scale: 1.02 },
-      { x: 66, z: -10, scale: 1.14 },
-    ]) {
-      this.levelGroup.add(this.buildPalmTree(theme, palm));
-    }
+  decorateBiome(theme, layout, visuals) {
+    const gateTorchOffsets = [
+      { x: -5.4, z: -4.4 },
+      { x: -5.4, z: 4.4 },
+      { x: 5.4, z: -4.4 },
+      { x: 5.4, z: 4.4 },
+    ];
 
-    for (const rock of [
-      { x: -5, z: 24, scale: 1.05 },
-      { x: 30, z: -20, scale: 1.35 },
-      { x: 45, z: 13, scale: 1.15 },
-      { x: 57, z: -19, scale: 1.55 },
-    ]) {
-      this.levelGroup.add(this.buildLagoonRock(theme, rock));
-    }
+    switch (theme.biome) {
+      case "crystal":
+        for (const foam of [
+          { x: 30, z: -19, scale: 1.05, spin: 0.18, color: theme.portal },
+          { x: 45, z: 14, scale: 0.94, spin: -0.14, color: theme.crystal },
+        ]) {
+          const ring = this.buildFoamRing(foam);
+          visuals.foamRings.push(ring);
+          this.levelGroup.add(ring);
+        }
 
-    for (const patch of [
-      { x: -36, z: -8 },
-      { x: -2, z: 10 },
-      { x: 19, z: 18 },
-      { x: 55, z: -11 },
-    ]) {
-      this.levelGroup.add(this.buildFlowerPatch(theme, patch.x, patch.z));
+        for (const position of [
+          { x: -31, z: -12, scale: 1.1 },
+          { x: -13, z: 13, scale: 0.95 },
+          { x: 18, z: -13, scale: 1.05 },
+          { x: 24, z: 21, scale: 0.88 },
+          { x: 58, z: 15, scale: 1.18 },
+        ]) {
+          this.levelGroup.add(this.buildCrystal(theme, position.x, position.z, position));
+        }
+
+        for (const rock of [
+          { x: -4, z: 24, scale: 1.08, color: theme.stone },
+          { x: 30, z: -20, scale: 1.32, color: theme.stoneDark },
+          { x: 56, z: -18, scale: 1.5, color: theme.stoneDark },
+        ]) {
+          this.levelGroup.add(this.buildLagoonRock(theme, rock));
+        }
+
+        for (const offset of gateTorchOffsets) {
+          this.levelGroup.add(this.buildTorch(theme, layout.gate.x + offset.x, layout.gate.z + offset.z));
+        }
+        break;
+      case "volcano":
+        for (const foam of [
+          { x: 25, z: -18, scale: 1.1, spin: 0.22, color: "#ffd08a" },
+          { x: 53, z: 14, scale: 1.24, spin: -0.18, color: "#ff914a" },
+        ]) {
+          const ring = this.buildFoamRing(foam);
+          visuals.foamRings.push(ring);
+          this.levelGroup.add(ring);
+        }
+
+        for (const spire of [
+          { x: -41, z: -8, scale: 1.08 },
+          { x: -5, z: 13, scale: 0.96 },
+          { x: 20, z: 20, scale: 1.1 },
+          { x: 34, z: -14, scale: 1.2 },
+          { x: 60, z: 12, scale: 1.28 },
+        ]) {
+          this.levelGroup.add(this.buildBasaltSpire(theme, spire));
+        }
+
+        for (const rock of [
+          { x: -10, z: -20, scale: 1.2, color: theme.stoneDark },
+          { x: 44, z: 14, scale: 1.22, color: theme.stoneDark },
+        ]) {
+          this.levelGroup.add(this.buildLagoonRock(theme, rock));
+        }
+
+        for (const offset of gateTorchOffsets) {
+          this.levelGroup.add(this.buildTorch(theme, layout.gate.x + offset.x, layout.gate.z + offset.z));
+        }
+        break;
+      case "skyfort":
+        for (const cannon of [
+          { x: -43, z: -7, scale: 0.95, yaw: -0.4 },
+          { x: -4, z: -12, scale: 1, yaw: 0.3 },
+          { x: 22, z: 19, scale: 1.04, yaw: -0.5 },
+          { x: 59, z: 13, scale: 1.08, yaw: 0.28 },
+        ]) {
+          this.levelGroup.add(this.buildCannon(theme, cannon));
+        }
+
+        for (const post of [
+          { x: -18, z: 14, scale: 1.1 },
+          { x: 2, z: 14, scale: 0.96 },
+          { x: 33, z: 8, scale: 1.02 },
+          { x: 67, z: -9, scale: 1.14 },
+        ]) {
+          this.levelGroup.add(this.buildLanternPost(theme, post));
+        }
+        break;
+      case "haunted":
+        for (const post of [
+          { x: -42, z: -6, scale: 0.96 },
+          { x: -8, z: -2, scale: 1 },
+          { x: 15, z: 16, scale: 1.06 },
+          { x: 44, z: 12, scale: 1.12 },
+        ]) {
+          this.levelGroup.add(this.buildLanternPost(theme, post));
+        }
+
+        for (const gearDef of [
+          { x: -20, z: -11, scale: 0.98, spin: 0.24 },
+          { x: 10, z: 10, scale: 1.08, spin: -0.22 },
+          { x: 47, z: -10, scale: 1.18, spin: 0.18 },
+        ]) {
+          const gear = this.buildClockGear(theme, gearDef);
+          visuals.rotatingProps.push(gear);
+          this.levelGroup.add(gear);
+        }
+
+        for (const crystal of [
+          { x: 4, z: 18, scale: 0.85, color: theme.portal, baseColor: theme.stoneDark },
+          { x: 55, z: 14, scale: 0.92, color: theme.crystal, baseColor: theme.stoneDark },
+        ]) {
+          this.levelGroup.add(this.buildCrystal(theme, crystal.x, crystal.z, crystal));
+        }
+        break;
+      case "frozen":
+        for (const foam of [
+          { x: 28, z: -18, scale: 1, spin: 0.15, color: "#f6ffff" },
+          { x: 58, z: 14, scale: 1.18, spin: -0.11, color: "#dff8ff" },
+        ]) {
+          const ring = this.buildFoamRing(foam);
+          visuals.foamRings.push(ring);
+          this.levelGroup.add(ring);
+        }
+
+        for (const tree of [
+          { x: -44, z: -8, scale: 1.05 },
+          { x: -37, z: 9, scale: 0.92 },
+          { x: -5, z: -13, scale: 1.02 },
+          { x: 23, z: 21, scale: 1.08 },
+          { x: 62, z: -11, scale: 1.16 },
+        ]) {
+          this.levelGroup.add(this.buildPineTree(theme, tree));
+        }
+
+        for (const crystal of [
+          { x: 5, z: 13, scale: 0.82, color: theme.ice, baseColor: theme.stoneDark },
+          { x: 31, z: 11, scale: 0.95, color: theme.portal, baseColor: theme.stoneDark },
+          { x: 57, z: 16, scale: 1.18, color: theme.crystal, baseColor: theme.stoneDark },
+        ]) {
+          this.levelGroup.add(this.buildCrystal(theme, crystal.x, crystal.z, crystal));
+        }
+
+        for (const rock of [
+          { x: -8, z: 22, scale: 1.12, color: theme.stone },
+          { x: 44, z: -19, scale: 1.26, color: theme.stoneDark },
+        ]) {
+          this.levelGroup.add(this.buildLagoonRock(theme, rock));
+        }
+        break;
+      default:
+        break;
     }
   }
 
   getRectPlatformStyle(rect, theme) {
-    if (rect.surfaceType === "wood") {
-      return {
-        surface: theme.wood,
-        side: theme.woodDark,
-        under: theme.stoneDark,
-        accent: theme.gate,
-        depth: rect.depth ?? 3.8,
-      };
+    switch (rect.surfaceType) {
+      case "wood":
+      case "deck":
+        return {
+          surface: theme.wood,
+          side: theme.woodDark,
+          under: theme.stoneDark,
+          accent: theme.gate,
+          depth: rect.depth ?? 3.8,
+          addRails: true,
+        };
+      case "metal":
+        return {
+          surface: theme.metal ?? theme.stone,
+          side: theme.metalDark ?? theme.stoneDark,
+          under: theme.stoneDark,
+          accent: theme.portal,
+          depth: rect.depth ?? 3.8,
+          addRails: true,
+        };
+      case "stone":
+        return {
+          surface: theme.stone,
+          side: theme.stoneDark,
+          under: theme.cliffDark,
+          accent: theme.gate,
+          sand: theme.stone,
+          depth: rect.depth ?? 4.2,
+          addRails: false,
+        };
+      case "crystal":
+        return {
+          surface: theme.stone,
+          sand: theme.crystal,
+          side: theme.cliff,
+          under: theme.cliffDark,
+          depth: rect.depth ?? 6,
+        };
+      case "volcanic":
+        return {
+          surface: theme.stone,
+          sand: theme.cliff,
+          side: theme.cliff,
+          under: theme.cliffDark,
+          depth: rect.depth ?? 6,
+        };
+      case "haunted":
+        return {
+          surface: theme.stone,
+          sand: theme.grass,
+          side: theme.cliff,
+          under: theme.cliffDark,
+          depth: rect.depth ?? 6,
+        };
+      case "ice":
+        return {
+          surface: theme.ice ?? theme.stone,
+          sand: theme.sand,
+          side: theme.cliff,
+          under: theme.cliffDark,
+          accent: theme.portal,
+          depth: rect.depth ?? 6,
+          addRails: false,
+        };
+      default:
+        return {
+          surface: theme.grass,
+          sand: theme.sand ?? theme.stone,
+          side: theme.cliff,
+          under: theme.cliffDark,
+          depth: rect.depth ?? 5.8,
+        };
     }
-
-    return {
-      surface: theme.grass,
-      sand: theme.sand ?? theme.stone,
-      side: theme.cliff,
-      under: theme.cliffDark,
-      depth: rect.depth ?? 5.8,
-    };
   }
 
   createPlatform(rect, theme, options = {}) {
-    if (rect.surfaceType === "wood") {
+    const platformKind = rect.kind ?? (rect.surfaceType === "wood" ? "bridge" : "island");
+    if (platformKind === "bridge") {
       return this.createBridgePlatform(rect, theme, options);
     }
 
@@ -1512,71 +2307,99 @@ export class Game {
     const depthSize = options.depth ?? 3.8;
     const deckColor = options.surface ?? theme.wood;
     const railColor = options.accent ?? theme.gate;
+    const addRails = options.addRails !== false;
+    const overlap = 1.2;
+    const extendedLength = length + overlap * 2;
+    const supportLong = extendedLength * 0.94;
+    const supportCross = lane * 0.72;
+    const deckCross = lane * 0.92;
+    const deckY = WORLD_Y + 0.22;
+    const plankY = WORLD_Y + 0.42;
+    const abutmentY = WORLD_Y + 0.28;
+    const railPostY = WORLD_Y + 0.82;
+    const railY = WORLD_Y + 1.36;
 
     const support = createBox(
-      alongX ? width * 0.94 : width * 0.68,
+      alongX ? supportLong : supportCross,
       depthSize,
-      alongX ? depth * 0.68 : depth * 0.94,
+      alongX ? supportCross : supportLong,
       makeMaterial(options.under ?? theme.stoneDark)
     );
-    support.position.set(centerX, -depthSize / 2 + 0.05, centerZ);
+    support.position.set(centerX, -depthSize / 2 + 0.34, centerZ);
     group.add(support);
 
     const deck = createBox(
-      alongX ? width * 0.98 : width * 0.84,
+      alongX ? extendedLength : deckCross,
       0.34,
-      alongX ? depth * 0.84 : depth * 0.98,
+      alongX ? deckCross : extendedLength,
       makeMaterial(deckColor)
     );
-    deck.position.set(centerX, 0.78, centerZ);
+    deck.position.set(centerX, deckY, centerZ);
     group.add(deck);
 
-    const plankCount = Math.max(4, Math.floor(length / 1.5));
-    const plankLength = length / plankCount;
+    const plankCount = Math.max(5, Math.floor(extendedLength / 1.4));
+    const plankLength = extendedLength / plankCount;
     for (let index = 0; index < plankCount; index += 1) {
-      const offset = -length / 2 + plankLength * (index + 0.5);
+      const offset = -extendedLength / 2 + plankLength * (index + 0.5);
       const plank = createBox(
-        alongX ? plankLength * 0.84 : lane * 0.84,
+        alongX ? plankLength * 0.86 : lane * 0.86,
         0.2,
-        alongX ? lane * 0.82 : plankLength * 0.84,
+        alongX ? lane * 0.86 : plankLength * 0.86,
         makeMaterial(index % 2 === 0 ? deckColor : options.side ?? theme.woodDark)
       );
-      plank.position.set(centerX + (alongX ? offset : 0), 1, centerZ + (alongX ? 0 : offset));
+      plank.position.set(centerX + (alongX ? offset : 0), plankY, centerZ + (alongX ? 0 : offset));
       group.add(plank);
     }
 
-    const railOffset = lane * 0.34;
-    for (let index = 0; index <= plankCount; index += 2) {
-      const offset = -length / 2 + Math.min(index, plankCount) * plankLength;
-      const leftPost = createCylinder(0.12, 0.14, 1.15, makeMaterial(options.side ?? theme.woodDark), 6);
-      const rightPost = createCylinder(0.12, 0.14, 1.15, makeMaterial(options.side ?? theme.woodDark), 6);
-      leftPost.position.set(
-        centerX + (alongX ? offset : -railOffset),
-        WORLD_Y + 0.55,
-        centerZ + (alongX ? -railOffset : offset)
+    for (const direction of [-1, 1]) {
+      const abutment = createBox(
+        alongX ? 1.4 : lane * 0.94,
+        0.54,
+        alongX ? lane * 0.98 : 1.4,
+        makeMaterial(options.side ?? theme.stone)
       );
-      rightPost.position.set(
-        centerX + (alongX ? offset : railOffset),
-        WORLD_Y + 0.55,
-        centerZ + (alongX ? railOffset : offset)
+      abutment.position.set(
+        centerX + (alongX ? direction * (extendedLength / 2 - 0.42) : 0),
+        abutmentY,
+        centerZ + (alongX ? 0 : direction * (extendedLength / 2 - 0.42))
       );
-      group.add(leftPost, rightPost);
+      group.add(abutment);
     }
 
-    const upperRail = createCylinder(0.06, 0.06, length * 0.94, makeMaterial(railColor), 6);
-    const lowerRail = createCylinder(0.05, 0.05, length * 0.94, makeMaterial(railColor), 6);
-    if (alongX) {
-      upperRail.rotation.z = Math.PI / 2;
-      lowerRail.rotation.z = Math.PI / 2;
-      upperRail.position.set(centerX, WORLD_Y + 1.1, centerZ - railOffset);
-      lowerRail.position.set(centerX, WORLD_Y + 1.1, centerZ + railOffset);
-    } else {
-      upperRail.rotation.x = Math.PI / 2;
-      lowerRail.rotation.x = Math.PI / 2;
-      upperRail.position.set(centerX - railOffset, WORLD_Y + 1.1, centerZ);
-      lowerRail.position.set(centerX + railOffset, WORLD_Y + 1.1, centerZ);
+    if (addRails) {
+      const railOffset = lane * 0.34;
+      for (let index = 0; index <= plankCount; index += 2) {
+        const offset = -extendedLength / 2 + Math.min(index, plankCount) * plankLength;
+        const leftPost = createCylinder(0.12, 0.14, 1.15, makeMaterial(options.side ?? theme.woodDark), 6);
+        const rightPost = createCylinder(0.12, 0.14, 1.15, makeMaterial(options.side ?? theme.woodDark), 6);
+        leftPost.position.set(
+          centerX + (alongX ? offset : -railOffset),
+          railPostY,
+          centerZ + (alongX ? -railOffset : offset)
+        );
+        rightPost.position.set(
+          centerX + (alongX ? offset : railOffset),
+          railPostY,
+          centerZ + (alongX ? railOffset : offset)
+        );
+        group.add(leftPost, rightPost);
+      }
+
+      const upperRail = createCylinder(0.06, 0.06, extendedLength * 0.95, makeMaterial(railColor), 6);
+      const lowerRail = createCylinder(0.05, 0.05, extendedLength * 0.95, makeMaterial(railColor), 6);
+      if (alongX) {
+        upperRail.rotation.z = Math.PI / 2;
+        lowerRail.rotation.z = Math.PI / 2;
+        upperRail.position.set(centerX, railY, centerZ - railOffset);
+        lowerRail.position.set(centerX, railY, centerZ + railOffset);
+      } else {
+        upperRail.rotation.x = Math.PI / 2;
+        lowerRail.rotation.x = Math.PI / 2;
+        upperRail.position.set(centerX - railOffset, railY, centerZ);
+        lowerRail.position.set(centerX + railOffset, railY, centerZ);
+      }
+      group.add(upperRail, lowerRail);
     }
-    group.add(upperRail, lowerRail);
 
     return group;
   }
@@ -1587,14 +2410,13 @@ export class Game {
       maxX: island.x + island.width / 2,
       minZ: island.z - island.depth / 2,
       maxZ: island.z + island.depth / 2,
+      surfaceType: island.surfaceType ?? theme.backdropSurfaceType ?? "grass",
+      depth: island.depthSize ?? 4.2,
+      kind: island.kind ?? "island",
     };
-    const group = this.createPlatform(rect, theme, {
-      surface: theme.grass,
-      side: theme.cliff,
-      under: theme.cliffDark,
-      depth: 4.2,
-    });
+    const group = this.createPlatform(rect, theme, this.getRectPlatformStyle(rect, theme));
     group.scale.setScalar(island.scale);
+    group.position.y += island.y ?? 0;
     return group;
   }
 
@@ -1636,7 +2458,7 @@ export class Game {
 
   buildLagoonRock(theme, rock) {
     const group = new THREE.Group();
-    const material = makeMaterial(theme.stone);
+    const material = makeMaterial(rock.color ?? theme.stone);
 
     for (const piece of [
       { x: -0.5, y: 0.55, z: 0.18, s: 0.8 },
@@ -1658,14 +2480,14 @@ export class Game {
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(foam.scale * 1.2, foam.scale * 0.08, 10, 28),
       new THREE.MeshBasicMaterial({
-        color: "#ecffff",
+        color: foam.color ?? "#ecffff",
         transparent: true,
-        opacity: 0.3,
+        opacity: foam.opacity ?? 0.3,
         depthWrite: false,
       })
     );
     ring.rotation.x = Math.PI / 2;
-    ring.position.set(foam.x, 0.24, foam.z);
+    ring.position.set(foam.x, foam.y ?? 0.24, foam.z);
     ring.userData = {
       baseScale: 1,
       phase: foam.x * 0.07 + foam.z * 0.03,
@@ -1679,7 +2501,7 @@ export class Game {
     const material = new THREE.MeshBasicMaterial({
       color: theme.fog,
       transparent: true,
-      opacity: 0.72,
+      opacity: cloud.opacity ?? 0.72,
     });
 
     for (const puff of [
@@ -1740,35 +2562,38 @@ export class Game {
     return group;
   }
 
-  buildGate(theme, position) {
+  buildGate(theme, position, gateZone) {
     const group = new THREE.Group();
     const stone = makeMaterial(theme.gate);
     const dark = makeMaterial(theme.stoneDark);
+    const gateWidth = gateZone ? Math.max(7.2, gateZone.maxX - gateZone.minX + 1.2) : 8.4;
+    const towerAOffset = { x: -gateWidth / 2, z: 0 };
+    const towerBOffset = { x: gateWidth / 2, z: 0 };
 
     const leftBase = createBox(1.8, 5.2, 1.8, dark);
-    leftBase.position.set(-1.5, WORLD_Y + 2.6, -3.6);
+    leftBase.position.set(towerAOffset.x, WORLD_Y + 2.6, towerAOffset.z);
     const rightBase = createBox(1.8, 5.2, 1.8, dark);
-    rightBase.position.set(-1.5, WORLD_Y + 2.6, 3.6);
+    rightBase.position.set(towerBOffset.x, WORLD_Y + 2.6, towerBOffset.z);
     const leftCap = createBox(1.4, 4.6, 1.4, stone);
-    leftCap.position.set(-1.5, WORLD_Y + 2.6, -3.6);
+    leftCap.position.set(towerAOffset.x, WORLD_Y + 2.6, towerAOffset.z);
     const rightCap = createBox(1.4, 4.6, 1.4, stone);
-    rightCap.position.set(-1.5, WORLD_Y + 2.6, 3.6);
+    rightCap.position.set(towerBOffset.x, WORLD_Y + 2.6, towerBOffset.z);
     group.add(leftBase, rightBase, leftCap, rightCap);
 
-    const arch = createBox(2.2, 1.2, 9.2, stone);
-    arch.position.set(-1.5, WORLD_Y + 5.2, 0);
+    const arch = createBox(gateWidth + 1.2, 1.2, 2.2, stone);
+    arch.position.set(0, WORLD_Y + 5.2, 0);
     group.add(arch);
 
     const bars = new THREE.Group();
     for (let index = 0; index < 5; index += 1) {
-      const bar = createBox(0.32, 3.8, 0.28, makeMaterial(theme.gate));
-      bar.position.set(0, WORLD_Y + 2.2, -2.4 + index * 1.2);
+      const lateralOffset = -gateWidth * 0.32 + (gateWidth * 0.64 * index) / 4;
+      const bar = createBox(0.28, 3.8, 0.32, makeMaterial(theme.gate));
+      bar.position.set(lateralOffset, WORLD_Y + 2.2, 0);
       bars.add(bar);
     }
-    const crossbar = createBox(0.32, 0.5, 6.5, makeMaterial(theme.gate));
+    const crossbar = createBox(gateWidth * 0.78, 0.5, 0.32, makeMaterial(theme.gate));
     crossbar.position.set(0, WORLD_Y + 3.8, 0);
     bars.add(crossbar);
-    bars.position.x = -0.1;
     group.add(bars);
 
     group.position.set(position.x, 0, position.z);
@@ -1830,13 +2655,13 @@ export class Game {
     return group;
   }
 
-  buildCrystal(theme, x, z) {
+  buildCrystal(theme, x, z, options = {}) {
     const group = new THREE.Group();
     const crystal = createCone(
       0.7,
       2.6,
-      makeMaterial(theme.crystal, {
-        emissive: theme.crystal,
+      makeMaterial(options.color ?? theme.crystal, {
+        emissive: options.color ?? theme.crystal,
         emissiveIntensity: 0.18,
       }),
       6
@@ -1844,12 +2669,13 @@ export class Game {
     crystal.position.y = WORLD_Y + 1.9;
     group.add(crystal);
 
-    const base = createCylinder(0.8, 1.1, 0.8, makeMaterial(theme.stoneDark));
+    const base = createCylinder(0.8, 1.1, 0.8, makeMaterial(options.baseColor ?? theme.stoneDark));
     base.position.y = WORLD_Y + 0.4;
     group.add(base);
 
     group.position.set(x, 0, z);
     group.rotation.y = (x + z) * 0.18;
+    group.scale.setScalar(options.scale ?? 1);
     return group;
   }
 
@@ -1891,6 +2717,188 @@ export class Game {
     return group;
   }
 
+  buildBasaltSpire(theme, spire) {
+    const group = new THREE.Group();
+    const darkMat = makeMaterial(theme.stoneDark);
+    const emberMat = makeMaterial(theme.portal, {
+      emissive: theme.portal,
+      emissiveIntensity: 0.28,
+    });
+
+    for (const shard of [
+      { x: -0.42, height: 2.2, z: -0.16, tilt: 0.12 },
+      { x: 0.1, height: 2.9, z: 0.12, tilt: -0.08 },
+      { x: 0.52, height: 1.9, z: -0.08, tilt: 0.16 },
+    ]) {
+      const spike = createCone(0.42, shard.height, darkMat, 5);
+      spike.position.set(shard.x, WORLD_Y + shard.height / 2, shard.z);
+      spike.rotation.z = shard.tilt;
+      group.add(spike);
+    }
+
+    const ember = createCone(0.26, 1.18, emberMat, 5);
+    ember.position.set(0.08, WORLD_Y + 3.4, 0.04);
+    group.add(ember);
+
+    group.position.set(spire.x, 0, spire.z);
+    group.scale.setScalar(spire.scale ?? 1);
+    return group;
+  }
+
+  buildCannon(theme, cannon) {
+    const group = new THREE.Group();
+    const woodMat = makeMaterial(theme.woodDark);
+    const metalMat = makeMaterial(theme.metal ?? theme.stone);
+    const trimMat = makeMaterial(theme.gate);
+
+    const base = createBox(2.2, 0.52, 1.5, woodMat);
+    base.position.y = WORLD_Y + 0.34;
+    group.add(base);
+
+    const barrel = createCylinder(0.44, 0.54, 2.6, metalMat, 10);
+    barrel.rotation.z = Math.PI / 2;
+    barrel.position.set(0.35, WORLD_Y + 0.98, 0);
+    group.add(barrel);
+
+    const muzzle = createCylinder(0.58, 0.5, 0.34, trimMat, 10);
+    muzzle.rotation.z = Math.PI / 2;
+    muzzle.position.set(1.64, WORLD_Y + 0.98, 0);
+    group.add(muzzle);
+
+    for (const wheelOffset of [-0.72, 0.72]) {
+      const wheel = createCylinder(0.46, 0.46, 0.2, woodMat, 12);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(-0.42, WORLD_Y + 0.42, wheelOffset);
+      group.add(wheel);
+    }
+
+    group.position.set(cannon.x, 0, cannon.z);
+    group.rotation.y = cannon.yaw ?? 0;
+    group.scale.setScalar(cannon.scale ?? 1);
+    return group;
+  }
+
+  buildLanternPost(theme, postDef) {
+    const group = new THREE.Group();
+    const postMat = makeMaterial(theme.woodDark);
+    const lanternMat = makeMaterial(theme.portal, {
+      emissive: theme.portal,
+      emissiveIntensity: 0.36,
+    });
+    const trimMat = makeMaterial(theme.metalDark ?? theme.stoneDark);
+
+    const post = createCylinder(0.12, 0.16, 2.8, postMat, 6);
+    post.position.y = WORLD_Y + 1.4;
+    group.add(post);
+
+    const arm = createBox(0.8, 0.12, 0.12, trimMat);
+    arm.position.set(0.26, WORLD_Y + 2.56, 0);
+    group.add(arm);
+
+    const lantern = createBox(0.42, 0.58, 0.42, lanternMat);
+    lantern.position.set(0.56, WORLD_Y + 2.12, 0);
+    group.add(lantern);
+
+    group.position.set(postDef.x, 0, postDef.z);
+    group.scale.setScalar(postDef.scale ?? 1);
+    return group;
+  }
+
+  buildClockGear(theme, gearDef) {
+    const group = new THREE.Group();
+    const metalMat = makeMaterial(theme.metal ?? theme.stone);
+    const glowMat = makeMaterial(theme.portal, {
+      emissive: theme.portal,
+      emissiveIntensity: 0.22,
+    });
+
+    const pillar = createCylinder(0.24, 0.3, 2.8, makeMaterial(theme.stoneDark), 8);
+    pillar.position.y = WORLD_Y + 1.4;
+    group.add(pillar);
+
+    const outer = configureShadow(new THREE.Mesh(new THREE.TorusGeometry(1.12, 0.16, 12, 18), metalMat));
+    outer.rotation.y = Math.PI / 2;
+    outer.position.y = WORLD_Y + 2.35;
+    group.add(outer);
+
+    for (let index = 0; index < 8; index += 1) {
+      const tooth = createBox(0.2, 0.22, 0.44, metalMat);
+      const angle = (Math.PI * 2 * index) / 8;
+      tooth.position.set(Math.cos(angle) * 1.12, WORLD_Y + 2.35, Math.sin(angle) * 1.12);
+      tooth.rotation.y = angle;
+      group.add(tooth);
+    }
+
+    const hub = createCylinder(0.34, 0.34, 0.28, glowMat, 10);
+    hub.rotation.x = Math.PI / 2;
+    hub.position.y = WORLD_Y + 2.35;
+    group.add(hub);
+
+    group.position.set(gearDef.x, 0, gearDef.z);
+    group.scale.setScalar(gearDef.scale ?? 1);
+    group.userData.spin = gearDef.spin ?? 0.18;
+    return group;
+  }
+
+  buildPineTree(theme, tree) {
+    const group = new THREE.Group();
+    const trunkMat = makeMaterial(theme.woodDark);
+    const leafMat = makeMaterial("#77a9b8");
+    const leafShadeMat = makeMaterial("#5e8597");
+
+    const trunk = createCylinder(0.2, 0.28, 2, trunkMat, 7);
+    trunk.position.y = WORLD_Y + 1;
+    group.add(trunk);
+
+    for (const layer of [
+      { y: 1.8, radius: 0.9, height: 1.5, mat: leafShadeMat },
+      { y: 2.5, radius: 0.72, height: 1.3, mat: leafMat },
+      { y: 3.1, radius: 0.54, height: 1.05, mat: leafShadeMat },
+    ]) {
+      const cone = createCone(layer.radius, layer.height, layer.mat, 7);
+      cone.position.y = WORLD_Y + layer.y;
+      group.add(cone);
+    }
+
+    group.position.set(tree.x, 0, tree.z);
+    group.scale.setScalar(tree.scale ?? 1);
+    return group;
+  }
+
+  buildAirship(theme, ship) {
+    const group = new THREE.Group();
+    const balloonMat = makeMaterial(theme.portal, {
+      emissive: theme.portal,
+      emissiveIntensity: 0.16,
+    });
+    const hullMat = makeMaterial(theme.wood);
+    const trimMat = makeMaterial(theme.metalDark ?? theme.stoneDark);
+
+    const balloon = createSphere(2.6, balloonMat, 16, 12);
+    balloon.scale.set(1.48, 1, 1.02);
+    balloon.position.y = 2.8;
+    group.add(balloon);
+
+    const hull = createBox(3.2, 0.8, 1.2, hullMat);
+    hull.position.y = 0.3;
+    group.add(hull);
+
+    const cabin = createBox(1.2, 0.6, 0.9, trimMat);
+    cabin.position.set(-0.2, -0.32, 0);
+    group.add(cabin);
+
+    for (const ropeX of [-0.9, 0.9]) {
+      const rope = createCylinder(0.04, 0.04, 2.1, trimMat, 5);
+      rope.position.set(ropeX, 1.35, 0);
+      group.add(rope);
+    }
+
+    group.position.set(ship.x, ship.y, ship.z);
+    group.rotation.y = ship.yaw ?? 0;
+    group.scale.setScalar(ship.scale ?? 1);
+    return group;
+  }
+
   spawnPlayerVisual() {
     if (!this.player) {
       return;
@@ -1898,11 +2906,14 @@ export class Game {
 
     this.playerVisual = this.buildHeroModel(this.selectedCharacter);
     this.characterGroup.add(this.playerVisual);
-    this.spawnAttackPreview();
     this.spawnAimReticle();
   }
 
   buildHeroModel(character) {
+    if (character.form === "teacher") {
+      return this.buildTeacherHero(character);
+    }
+
     if (character.form === "dragon") {
       return this.buildDragonHero(character);
     }
@@ -1912,6 +2923,187 @@ export class Game {
     }
 
     return this.buildBruteHero(character);
+  }
+
+  buildKeyboardWeapon(keyMat, keycapMat, accentMat) {
+    const group = new THREE.Group();
+    const body = createBox(2.1, 0.18, 0.72, keyMat);
+    group.add(body);
+
+    for (let row = 0; row < 3; row += 1) {
+      for (let col = 0; col < 8; col += 1) {
+        const key = createBox(0.16, 0.06, 0.12, (row + col) % 5 === 0 ? accentMat : keycapMat);
+        key.position.set(-0.74 + col * 0.21, 0.13, -0.22 + row * 0.2);
+        group.add(key);
+      }
+    }
+
+    const spacebar = createBox(0.82, 0.06, 0.12, accentMat);
+    spacebar.position.set(0.1, 0.14, 0.32);
+    group.add(spacebar);
+
+    group.rotation.x = Math.PI / 2;
+    group.rotation.z = -0.18;
+    return group;
+  }
+
+  buildTeacherHero(character) {
+    const group = new THREE.Group();
+    const shirtMat = makeMaterial(character.color);
+    const pantsMat = makeMaterial(character.secondaryColor);
+    const skinMat = makeMaterial(character.detailColor);
+    const hairMat = makeMaterial("#7a4a2f");
+    const beardMat = makeMaterial("#8d786c");
+    const mustacheMat = makeMaterial("#6f4f3f");
+    const shadowMat = makeMaterial("#6f7884");
+    const undershirtMat = makeMaterial("#f4f4ef");
+    const keyboardMat = makeMaterial("#20242d");
+    const keycapMat = makeMaterial(character.accent);
+    const eyeMat = makeMaterial(character.eyeColor, {
+      emissive: character.eyeColor,
+      emissiveIntensity: 0.18,
+    });
+
+    const torso = createBox(1.42, 1.82, 0.82, shirtMat);
+    torso.position.set(0, WORLD_Y + 2.25, 0.04);
+    group.add(torso);
+
+    const undershirt = createBox(0.52, 0.78, 0.12, undershirtMat);
+    undershirt.position.set(0, WORLD_Y + 2.82, 0.5);
+    group.add(undershirt);
+
+    const placket = createBox(0.18, 0.9, 0.08, shadowMat);
+    placket.position.set(0, WORLD_Y + 2.74, 0.56);
+    group.add(placket);
+
+    const leftCollar = createBox(0.58, 0.14, 0.46, shirtMat);
+    leftCollar.position.set(-0.28, WORLD_Y + 3.16, 0.36);
+    leftCollar.rotation.z = -0.32;
+    const rightCollar = createBox(0.58, 0.14, 0.46, shirtMat);
+    rightCollar.position.set(0.28, WORLD_Y + 3.16, 0.36);
+    rightCollar.rotation.z = 0.32;
+    group.add(leftCollar, rightCollar);
+
+    const head = createSphere(0.76, skinMat, 16, 12);
+    head.position.set(0, WORLD_Y + 3.58, 0.08);
+    head.scale.set(0.92, 1, 0.88);
+    group.add(head);
+
+    const hair = createSphere(0.78, hairMat, 14, 8);
+    hair.position.set(0, WORLD_Y + 4.02, -0.04);
+    hair.scale.set(0.96, 0.46, 0.88);
+    group.add(hair);
+
+    for (const tuft of [
+      { x: -0.34, y: 4.2, z: 0.26, rz: 0.34, s: 0.9 },
+      { x: -0.05, y: 4.28, z: 0.3, rz: 0.04, s: 1.05 },
+      { x: 0.25, y: 4.2, z: 0.24, rz: -0.3, s: 0.86 },
+    ]) {
+      const hairTuft = createCone(0.22 * tuft.s, 0.72 * tuft.s, hairMat, 6);
+      hairTuft.position.set(tuft.x, WORLD_Y + tuft.y, tuft.z);
+      hairTuft.rotation.x = Math.PI * 0.42;
+      hairTuft.rotation.z = tuft.rz;
+      group.add(hairTuft);
+    }
+
+    const leftEar = createSphere(0.16, skinMat, 8, 6);
+    leftEar.position.set(-0.72, WORLD_Y + 3.58, 0.08);
+    leftEar.scale.set(0.55, 1, 0.42);
+    const rightEar = createSphere(0.16, skinMat, 8, 6);
+    rightEar.position.set(0.72, WORLD_Y + 3.58, 0.08);
+    rightEar.scale.set(0.55, 1, 0.42);
+    group.add(leftEar, rightEar);
+
+    const nose = createSphere(0.13, skinMat, 8, 6);
+    nose.position.set(0, WORLD_Y + 3.48, 0.76);
+    nose.scale.set(0.78, 1, 0.82);
+    group.add(nose);
+
+    const beard = createSphere(0.48, beardMat, 12, 8);
+    beard.position.set(0, WORLD_Y + 3.26, 0.6);
+    beard.scale.set(1.18, 0.45, 0.34);
+    group.add(beard);
+
+    const mustache = createBox(0.58, 0.08, 0.16, mustacheMat);
+    mustache.position.set(0, WORLD_Y + 3.38, 0.82);
+    group.add(mustache);
+
+    const smile = createBox(0.42, 0.04, 0.08, makeMaterial("#5f4037"));
+    smile.position.set(0, WORLD_Y + 3.18, 0.84);
+    group.add(smile);
+
+    const leftEye = createSphere(0.08, eyeMat, 8, 6);
+    leftEye.position.set(-0.22, WORLD_Y + 3.68, 0.72);
+    const rightEye = createSphere(0.08, eyeMat, 8, 6);
+    rightEye.position.set(0.22, WORLD_Y + 3.68, 0.72);
+    group.add(leftEye, rightEye);
+
+    const leftArmRig = new THREE.Group();
+    leftArmRig.position.set(-0.92, WORLD_Y + 2.82, 0.18);
+    leftArmRig.userData.baseZ = Math.PI * 0.08;
+    leftArmRig.rotation.z = leftArmRig.userData.baseZ;
+    const leftArm = createCylinder(0.18, 0.22, 1.35, shirtMat, 7);
+    leftArm.position.set(0, -0.62, 0.04);
+    leftArmRig.add(leftArm);
+    const leftHand = createSphere(0.28, skinMat, 10, 8);
+    leftHand.position.set(0, -1.28, 0.28);
+    leftArmRig.add(leftHand);
+    group.add(leftArmRig);
+
+    const rightArmRig = new THREE.Group();
+    rightArmRig.position.set(0.92, WORLD_Y + 2.82, 0.18);
+    rightArmRig.userData.baseZ = -Math.PI * 0.08;
+    rightArmRig.rotation.z = rightArmRig.userData.baseZ;
+    const rightArm = createCylinder(0.18, 0.22, 1.35, shirtMat, 7);
+    rightArm.position.set(0, -0.62, 0.04);
+    rightArmRig.add(rightArm);
+    const rightHand = createSphere(0.28, skinMat, 10, 8);
+    rightHand.position.set(0, -1.28, 0.28);
+    rightArmRig.add(rightHand);
+    const keyboard = this.buildKeyboardWeapon(keyboardMat, keycapMat, eyeMat);
+    keyboard.position.set(0.2, -1.54, 0.76);
+    rightArmRig.add(keyboard);
+    group.add(rightArmRig);
+
+    const leftLegRig = new THREE.Group();
+    leftLegRig.position.set(-0.34, WORLD_Y + 1.46, 0.04);
+    leftLegRig.userData.baseZ = 0.02;
+    const leftLeg = createCylinder(0.22, 0.26, 1.32, pantsMat, 7);
+    leftLeg.position.set(0, -0.62, 0);
+    leftLegRig.add(leftLeg);
+    const leftFoot = createBox(0.54, 0.28, 0.86, keyboardMat);
+    leftFoot.position.set(0, -1.32, 0.3);
+    leftLegRig.add(leftFoot);
+    group.add(leftLegRig);
+
+    const rightLegRig = new THREE.Group();
+    rightLegRig.position.set(0.34, WORLD_Y + 1.46, 0.04);
+    rightLegRig.userData.baseZ = -0.02;
+    const rightLeg = createCylinder(0.22, 0.26, 1.32, pantsMat, 7);
+    rightLeg.position.set(0, -0.62, 0);
+    rightLegRig.add(rightLeg);
+    const rightFoot = createBox(0.54, 0.28, 0.86, keyboardMat);
+    rightFoot.position.set(0, -1.32, 0.3);
+    rightLegRig.add(rightFoot);
+    group.add(rightLegRig);
+
+    group.userData = {
+      type: "teacher",
+      torso,
+      head,
+      leftArmRig,
+      rightArmRig,
+      leftLegRig,
+      rightLegRig,
+      leftHand,
+      rightHand,
+      leftFoot,
+      rightFoot,
+      rightWeapon: keyboard,
+      bobSeed: 3.4,
+    };
+    group.scale.setScalar(1.02);
+    return setGroupShadows(group);
   }
 
   buildDragonHero(character) {
@@ -2284,13 +3476,20 @@ export class Game {
     return setGroupShadows(group);
   }
 
-  buildEnemyModel() {
+  buildEnemyModel(enemy = null) {
     const group = new THREE.Group();
     const theme = this.currentLevel.theme;
-    const bodyMat = makeMaterial(theme.enemy);
-    const darkMat = makeMaterial(theme.enemyDark);
+    const bodyMat = makeMaterial(theme.enemy, {
+      emissive: theme.enemy,
+      emissiveIntensity: 0.16,
+    });
+    const darkMat = makeMaterial(theme.enemyDark, {
+      emissive: theme.enemyDark,
+      emissiveIntensity: 0.08,
+    });
     const toothMat = makeMaterial("#fffbe0");
 
+    const bossScale = enemy?.boss ? (this.areaIndex === 4 ? 2.55 : 2.25) : 1;
     const body = createSphere(0.92, bodyMat);
     body.position.set(0, WORLD_Y + 1.15, 0);
     group.add(body);
@@ -2324,7 +3523,20 @@ export class Game {
       group.add(mesh);
     }
 
-    group.userData = { body, head, jaw, bobSeed: Math.random() * 10 };
+    if (enemy?.boss) {
+      const crownMat = makeMaterial(theme.portal, {
+        emissive: theme.portal,
+        emissiveIntensity: 0.32,
+      });
+      for (const offset of [-0.42, 0, 0.42]) {
+        const crownSpike = createCone(0.14, 0.62, crownMat, 5);
+        crownSpike.position.set(offset, WORLD_Y + 2.92 + Math.abs(offset) * 0.18, -0.06);
+        group.add(crownSpike);
+      }
+    }
+
+    group.userData = { body, head, jaw, bobSeed: Math.random() * 10, baseScale: bossScale };
+    group.scale.setScalar(bossScale);
     return setGroupShadows(group);
   }
 
@@ -2460,11 +3672,12 @@ export class Game {
       mesh.rotation.y = Math.atan2(enemy.facing.x, enemy.facing.z);
       mesh.position.y = Math.sin(this.time * 4 + mesh.userData.bobSeed) * 0.06;
 
-      const attackMix = Math.max(0, enemy.attackAnimUntil - this.time) / 0.2;
-      mesh.userData.jaw.rotation.x = -attackMix * 0.5;
+      const attackDuration = enemy.boss ? 0.34 : 0.2;
+      const attackMix = Math.max(0, enemy.attackAnimUntil - this.time) / attackDuration;
+      mesh.userData.jaw.rotation.x = -attackMix * (enemy.boss ? 0.75 : 0.5);
 
       const flash = this.time < enemy.hitFlashUntil ? 1.14 : 1;
-      mesh.scale.setScalar(flash);
+      mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * flash);
     }
   }
 
@@ -2500,7 +3713,9 @@ export class Game {
     }
 
     if (this.levelVisuals.waterShimmer) {
-      this.levelVisuals.waterShimmer.material.opacity = 0.12 + (Math.sin(this.time * 0.9) + 1) * 0.025;
+      const baseOpacity = this.levelVisuals.waterShimmer.userData.baseOpacity ?? 0.14;
+      this.levelVisuals.waterShimmer.material.opacity =
+        baseOpacity * 0.75 + (Math.sin(this.time * 0.9) + 1) * 0.02;
       this.levelVisuals.waterShimmer.rotation.z = Math.sin(this.time * 0.18) * 0.06;
     }
 
@@ -2508,6 +3723,13 @@ export class Game {
       for (const ring of this.levelVisuals.foamRings) {
         ring.rotation.z += dt * ring.userData.spin;
         ring.scale.setScalar(ring.userData.baseScale + Math.sin(this.time * 1.7 + ring.userData.phase) * 0.04);
+      }
+    }
+
+    if (this.levelVisuals.rotatingProps) {
+      for (const prop of this.levelVisuals.rotatingProps) {
+        prop.rotation.y += dt * (prop.userData.spin ?? 0.18);
+        prop.position.y = Math.sin(this.time * 1.8 + (prop.userData.spin ?? 0.18) * 10) * 0.06;
       }
     }
   }
@@ -2567,6 +3789,65 @@ export class Game {
   }
 }
 
+function populateInfoButtons(container, items, className) {
+  container.innerHTML = "";
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `${className}${item.disabled ? " is-disabled" : ""}${item.active ? " is-active" : ""}${
+      item.selected ? " is-selected" : ""
+    }${item.locked ? " is-locked" : ""}`;
+    button.disabled = Boolean(item.disabled);
+    button.innerHTML = `
+      <span class="character-meta">${item.meta ?? ""}</span>
+      <strong>${item.label}</strong>
+      <span>${item.description ?? ""}</span>
+    `;
+    button.addEventListener("click", () => {
+      if (!item.disabled) {
+        item.onClick?.();
+      }
+    });
+    container.appendChild(button);
+  }
+}
+
+export function populateActionButtons(container, items) {
+  populateInfoButtons(container, items, "menu-button");
+}
+
+export function populateSaveSlotButtons(container, items) {
+  populateInfoButtons(
+    container,
+    items.map((item) => ({
+      label: item.title,
+      meta: item.meta,
+      description: item.description,
+      active: item.active,
+      disabled: item.disabled,
+      onClick: item.onClick,
+    })),
+    "save-button"
+  );
+}
+
+export function populateLevelButtons(container, items) {
+  populateInfoButtons(
+    container,
+    items.map((item) => ({
+      label: item.label,
+      meta: item.meta,
+      description: item.description,
+      selected: item.selected,
+      locked: item.locked,
+      disabled: item.locked,
+      onClick: item.onClick,
+    })),
+    "level-button"
+  );
+}
+
 export function populateCharacterButtons(container, options) {
   container.innerHTML = "";
   const { progress, onPlay, onUnlock } = options;
@@ -2584,6 +3865,7 @@ export function populateCharacterButtons(container, options) {
       <strong>${character.name}</strong>
       <span>${character.title}</span>
       <span>${character.description}</span>
+      <span>${character.basicAttack.name} + ${character.special.name}</span>
     `;
     button.addEventListener("click", () => {
       if (unlocked) {

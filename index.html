@@ -13,8 +13,9 @@
           <p class="eyebrow">3D Adventure Prototype</p>
           <h1>Skylanders Arena</h1>
           <p>
-            Pick a chunky fantasy hero, clear the front half of a floating
-            island, find the key, unlock the gate, and push into the back half.
+            Pick a chunky fantasy hero, cross five handcrafted realms, find
+            the key in each one, unlock the gate, and fight your way to the
+            portal.
           </p>
         </div>
 
@@ -30,7 +31,7 @@
           </div>
           <div class="stat-row">
             <span>Area</span>
-            <strong id="hud-area">0 / 3</strong>
+            <strong id="hud-area">0 / 5</strong>
           </div>
           <div class="stat-row">
             <span>Enemies Left</span>
@@ -99,21 +100,34 @@
 
       <main class="stage-area">
         <div class="canvas-frame">
+          <button id="frame-fullscreen" class="frame-button" type="button">Fullscreen</button>
           <canvas id="game" width="1280" height="720"></canvas>
 
           <section id="overlay" class="overlay is-visible">
             <div class="overlay-card">
-              <p id="overlay-kicker" class="eyebrow">Portal Gate</p>
-              <h2 id="overlay-title">Choose a Hero</h2>
+              <div class="overlay-toolbar">
+                <div>
+                  <p id="overlay-kicker" class="eyebrow">Portal Gate</p>
+                  <h2 id="overlay-title">Choose a Hero</h2>
+                </div>
+                <button id="overlay-fullscreen" class="utility-button" type="button">Fullscreen</button>
+              </div>
               <p id="overlay-text">
-                Pick one fantasy fighter to start the 3D prototype.
+                Pick one fantasy fighter to begin the five-realm run.
               </p>
 
-              <div id="character-grid" class="character-grid"></div>
+              <div id="overlay-meta" class="overlay-meta hidden"></div>
+              <div id="menu-grid" class="menu-grid hidden"></div>
+              <div id="save-grid" class="save-grid hidden"></div>
+              <div id="level-grid" class="level-grid hidden"></div>
+              <div id="character-grid" class="character-grid hidden"></div>
 
-              <button id="overlay-action" class="action-button hidden" type="button">
-                Continue
-              </button>
+              <div class="overlay-actions">
+                <button id="overlay-back" class="utility-button hidden" type="button">Back</button>
+                <button id="overlay-action" class="action-button hidden" type="button">
+                  Continue
+                </button>
+              </div>
             </div>
           </section>
         </div>
