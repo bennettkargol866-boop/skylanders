@@ -1,5 +1,4 @@
-import * as THREE from "/src/three.module.js";
-//import * as THREE from "../node_modules/three/build/three.module.js";
+import * as THREE from "../node_modules/three/build/three.module.js";
 import {
   CHARACTER_DEFS,
   CHARACTER_LIST,
@@ -2955,9 +2954,6 @@ export class Game {
     const skinMat = makeMaterial(character.detailColor);
     const hairMat = makeMaterial("#7a4a2f");
     const beardMat = makeMaterial("#8d786c");
-    const mustacheMat = makeMaterial("#6f4f3f");
-    const shadowMat = makeMaterial("#6f7884");
-    const undershirtMat = makeMaterial("#f4f4ef");
     const keyboardMat = makeMaterial("#20242d");
     const keycapMat = makeMaterial(character.accent);
     const eyeMat = makeMaterial(character.eyeColor, {
@@ -2969,21 +2965,9 @@ export class Game {
     torso.position.set(0, WORLD_Y + 2.25, 0.04);
     group.add(torso);
 
-    const undershirt = createBox(0.52, 0.78, 0.12, undershirtMat);
-    undershirt.position.set(0, WORLD_Y + 2.82, 0.5);
-    group.add(undershirt);
-
-    const placket = createBox(0.18, 0.9, 0.08, shadowMat);
-    placket.position.set(0, WORLD_Y + 2.74, 0.56);
-    group.add(placket);
-
-    const leftCollar = createBox(0.58, 0.14, 0.46, shirtMat);
-    leftCollar.position.set(-0.28, WORLD_Y + 3.16, 0.36);
-    leftCollar.rotation.z = -0.32;
-    const rightCollar = createBox(0.58, 0.14, 0.46, shirtMat);
-    rightCollar.position.set(0.28, WORLD_Y + 3.16, 0.36);
-    rightCollar.rotation.z = 0.32;
-    group.add(leftCollar, rightCollar);
+    const collar = createBox(0.72, 0.16, 0.88, keycapMat);
+    collar.position.set(0, WORLD_Y + 3.12, 0.08);
+    group.add(collar);
 
     const head = createSphere(0.76, skinMat, 16, 12);
     head.position.set(0, WORLD_Y + 3.58, 0.08);
@@ -2995,43 +2979,10 @@ export class Game {
     hair.scale.set(0.96, 0.46, 0.88);
     group.add(hair);
 
-    for (const tuft of [
-      { x: -0.34, y: 4.2, z: 0.26, rz: 0.34, s: 0.9 },
-      { x: -0.05, y: 4.28, z: 0.3, rz: 0.04, s: 1.05 },
-      { x: 0.25, y: 4.2, z: 0.24, rz: -0.3, s: 0.86 },
-    ]) {
-      const hairTuft = createCone(0.22 * tuft.s, 0.72 * tuft.s, hairMat, 6);
-      hairTuft.position.set(tuft.x, WORLD_Y + tuft.y, tuft.z);
-      hairTuft.rotation.x = Math.PI * 0.42;
-      hairTuft.rotation.z = tuft.rz;
-      group.add(hairTuft);
-    }
-
-    const leftEar = createSphere(0.16, skinMat, 8, 6);
-    leftEar.position.set(-0.72, WORLD_Y + 3.58, 0.08);
-    leftEar.scale.set(0.55, 1, 0.42);
-    const rightEar = createSphere(0.16, skinMat, 8, 6);
-    rightEar.position.set(0.72, WORLD_Y + 3.58, 0.08);
-    rightEar.scale.set(0.55, 1, 0.42);
-    group.add(leftEar, rightEar);
-
-    const nose = createSphere(0.13, skinMat, 8, 6);
-    nose.position.set(0, WORLD_Y + 3.48, 0.76);
-    nose.scale.set(0.78, 1, 0.82);
-    group.add(nose);
-
     const beard = createSphere(0.48, beardMat, 12, 8);
     beard.position.set(0, WORLD_Y + 3.26, 0.6);
     beard.scale.set(1.18, 0.45, 0.34);
     group.add(beard);
-
-    const mustache = createBox(0.58, 0.08, 0.16, mustacheMat);
-    mustache.position.set(0, WORLD_Y + 3.38, 0.82);
-    group.add(mustache);
-
-    const smile = createBox(0.42, 0.04, 0.08, makeMaterial("#5f4037"));
-    smile.position.set(0, WORLD_Y + 3.18, 0.84);
-    group.add(smile);
 
     const leftEye = createSphere(0.08, eyeMat, 8, 6);
     leftEye.position.set(-0.22, WORLD_Y + 3.68, 0.72);
@@ -3477,7 +3428,7 @@ export class Game {
     return setGroupShadows(group);
   }
 
-  buildEnemyModel(enemy = null) {
+  buildEnemyModel() {
     const group = new THREE.Group();
     const theme = this.currentLevel.theme;
     const bodyMat = makeMaterial(theme.enemy, {
@@ -3490,7 +3441,6 @@ export class Game {
     });
     const toothMat = makeMaterial("#fffbe0");
 
-    const bossScale = enemy?.boss ? (this.areaIndex === 4 ? 2.55 : 2.25) : 1;
     const body = createSphere(0.92, bodyMat);
     body.position.set(0, WORLD_Y + 1.15, 0);
     group.add(body);
@@ -3524,20 +3474,7 @@ export class Game {
       group.add(mesh);
     }
 
-    if (enemy?.boss) {
-      const crownMat = makeMaterial(theme.portal, {
-        emissive: theme.portal,
-        emissiveIntensity: 0.32,
-      });
-      for (const offset of [-0.42, 0, 0.42]) {
-        const crownSpike = createCone(0.14, 0.62, crownMat, 5);
-        crownSpike.position.set(offset, WORLD_Y + 2.92 + Math.abs(offset) * 0.18, -0.06);
-        group.add(crownSpike);
-      }
-    }
-
-    group.userData = { body, head, jaw, bobSeed: Math.random() * 10, baseScale: bossScale };
-    group.scale.setScalar(bossScale);
+    group.userData = { body, head, jaw, bobSeed: Math.random() * 10 };
     return setGroupShadows(group);
   }
 
@@ -3673,12 +3610,11 @@ export class Game {
       mesh.rotation.y = Math.atan2(enemy.facing.x, enemy.facing.z);
       mesh.position.y = Math.sin(this.time * 4 + mesh.userData.bobSeed) * 0.06;
 
-      const attackDuration = enemy.boss ? 0.34 : 0.2;
-      const attackMix = Math.max(0, enemy.attackAnimUntil - this.time) / attackDuration;
-      mesh.userData.jaw.rotation.x = -attackMix * (enemy.boss ? 0.75 : 0.5);
+      const attackMix = Math.max(0, enemy.attackAnimUntil - this.time) / 0.2;
+      mesh.userData.jaw.rotation.x = -attackMix * 0.5;
 
       const flash = this.time < enemy.hitFlashUntil ? 1.14 : 1;
-      mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * flash);
+      mesh.scale.setScalar(flash);
     }
   }
 
