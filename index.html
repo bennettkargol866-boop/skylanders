@@ -8,125 +8,110 @@
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar">
-        <div class="panel panel-brand">
-          <p class="eyebrow">3D Adventure Prototype</p>
-          <h1>Skylanders Arena</h1>
-          <p>
-            Pick a chunky fantasy hero, cross five handcrafted realms, find
-            the key in each one, unlock the gate, and fight your way to the
-            portal.
-          </p>
-        </div>
-
-        <div class="panel">
-          <div class="panel-heading">
-            <h2>Battle HUD</h2>
-            <span id="hud-state" class="badge">Menu</span>
-          </div>
-
-          <div class="stat-row">
-            <span>Character</span>
-            <strong id="hud-character">None</strong>
-          </div>
-          <div class="stat-row">
-            <span>Area</span>
-            <strong id="hud-area">0 / 5</strong>
-          </div>
-          <div class="stat-row">
-            <span>Enemies Left</span>
-            <strong id="hud-enemies">0</strong>
-          </div>
-          <div class="stat-row">
-            <span>Coins</span>
-            <strong id="hud-coins">0</strong>
-          </div>
-          <div class="stat-row">
-            <span>Key</span>
-            <strong id="hud-key">Missing</strong>
-          </div>
-          <div class="stat-row">
-            <span>Status</span>
-            <strong id="hud-reward">Select a hero to begin</strong>
-          </div>
-
-          <div class="meter-group">
-            <div class="meter-label">
-              <span>Health</span>
-              <strong id="hud-health-text">0 / 0</strong>
-            </div>
-            <div class="meter-track">
-              <div id="health-fill" class="meter-fill meter-health"></div>
-            </div>
-          </div>
-
-          <div class="meter-group">
-            <div class="meter-label">
-              <span>Basic Attack</span>
-              <strong id="basic-text">Ready</strong>
-            </div>
-            <div class="meter-track">
-              <div id="basic-fill" class="meter-fill meter-basic"></div>
-            </div>
-          </div>
-
-          <div class="meter-group">
-            <div class="meter-label">
-              <span>Special</span>
-              <strong id="special-text">Ready</strong>
-            </div>
-            <div class="meter-track">
-              <div id="special-fill" class="meter-fill meter-special"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-heading">
-            <h2>Controls</h2>
-          </div>
-          <ul class="controls-list">
-            <li><kbd>WASD</kbd> or <kbd>Arrows</kbd> to move</li>
-            <li>Move the <kbd>Mouse</kbd> to aim your hero</li>
-            <li><kbd>Left Click</kbd> to swing the basic attack</li>
-            <li><kbd>Right Click</kbd> or <kbd>E</kbd> for the special ability</li>
-            <li><kbd>Space</kbd> to jump</li>
-            <li>Find the key, then bring it to the gate</li>
-            <li><kbd>Enter</kbd> to continue after clearing an area</li>
-            <li><kbd>R</kbd> to restart after defeat</li>
-          </ul>
-        </div>
-      </aside>
-
       <main class="stage-area">
         <div class="canvas-frame">
-          <button id="frame-fullscreen" class="frame-button" type="button">Fullscreen</button>
-          <canvas id="game" width="1280" height="720"></canvas>
+          <aside class="rules-rail" aria-label="Rules">
+            <h1>Rules</h1>
+            <ul class="controls-list">
+              <li><kbd>WASD</kbd> or <kbd>Arrows</kbd> move</li>
+              <li><kbd>Mouse</kbd> aims</li>
+              <li><kbd>Left Click</kbd> basic attack</li>
+              <li><kbd>Right Click</kbd> or <kbd>E</kbd> special</li>
+              <li><kbd>Space</kbd> jump</li>
+              <li>Find the key, open the gate, clear the portal</li>
+            </ul>
+          </aside>
 
-          <section id="overlay" class="overlay is-visible">
-            <div class="overlay-card">
-              <div class="overlay-toolbar">
-                <div>
-                  <p id="overlay-kicker" class="eyebrow">Portal Gate</p>
-                  <h2 id="overlay-title">Choose a Hero</h2>
+          <div class="playfield">
+            <button id="frame-fullscreen" class="frame-button" type="button">Fullscreen</button>
+            <canvas id="game" width="1280" height="720"></canvas>
+
+            <section id="overlay" class="overlay is-visible">
+              <div class="overlay-card">
+                <div class="overlay-toolbar">
+                  <div>
+                    <p id="overlay-kicker" class="eyebrow">Portal Gate</p>
+                    <h2 id="overlay-title">Choose a Hero</h2>
+                  </div>
+                  <button id="overlay-fullscreen" class="utility-button" type="button">Fullscreen</button>
                 </div>
-                <button id="overlay-fullscreen" class="utility-button" type="button">Fullscreen</button>
+                <p id="overlay-text">
+                  Pick one fantasy fighter to begin the five-realm run.
+                </p>
+
+                <div id="overlay-meta" class="overlay-meta hidden"></div>
+                <div id="menu-grid" class="menu-grid hidden"></div>
+                <div id="save-grid" class="save-grid hidden"></div>
+                <div id="level-grid" class="level-grid hidden"></div>
+                <div id="character-grid" class="character-grid hidden"></div>
+
+                <div class="overlay-actions">
+                  <button id="overlay-back" class="utility-button hidden" type="button">Back</button>
+                  <button id="overlay-action" class="action-button hidden" type="button">
+                    Continue
+                  </button>
+                </div>
               </div>
-              <p id="overlay-text">
-                Pick one fantasy fighter to begin the five-realm run.
-              </p>
+            </section>
+          </div>
 
-              <div id="overlay-meta" class="overlay-meta hidden"></div>
-              <div id="menu-grid" class="menu-grid hidden"></div>
-              <div id="save-grid" class="save-grid hidden"></div>
-              <div id="level-grid" class="level-grid hidden"></div>
-              <div id="character-grid" class="character-grid hidden"></div>
+          <section class="bottom-hud" aria-label="Battle HUD">
+            <div class="character-orb" aria-hidden="true"></div>
 
-              <div class="overlay-actions">
-                <button id="overlay-back" class="utility-button hidden" type="button">Back</button>
-                <button id="overlay-action" class="action-button hidden" type="button">
-                  Continue
-                </button>
+            <div class="hud-primary">
+              <div class="hud-topline">
+                <span id="hud-state" class="badge">Menu</span>
+                <strong id="hud-character">None</strong>
+                <span id="hud-reward">Select a hero to begin</span>
+              </div>
+              <div class="meter-group health-strip">
+                <div class="meter-label">
+                  <span>Health</span>
+                  <strong id="hud-health-text">0 / 0</strong>
+                </div>
+                <div class="meter-track">
+                  <div id="health-fill" class="meter-fill meter-health"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hud-stats">
+              <div class="stat-row">
+                <span>Area</span>
+                <strong id="hud-area">0 / 5</strong>
+              </div>
+              <div class="stat-row">
+                <span>Enemies</span>
+                <strong id="hud-enemies">0</strong>
+              </div>
+              <div class="stat-row">
+                <span>Coins</span>
+                <strong id="hud-coins">0</strong>
+              </div>
+              <div class="stat-row">
+                <span>Key</span>
+                <strong id="hud-key">Missing</strong>
+              </div>
+            </div>
+
+            <div class="ability-meters">
+              <div class="meter-group">
+                <div class="meter-label">
+                  <span>Basic</span>
+                  <strong id="basic-text">Ready</strong>
+                </div>
+                <div class="meter-track">
+                  <div id="basic-fill" class="meter-fill meter-basic"></div>
+                </div>
+              </div>
+              <div class="meter-group">
+                <div class="meter-label">
+                  <span>Special</span>
+                  <strong id="special-text">Ready</strong>
+                </div>
+                <div class="meter-track">
+                  <div id="special-fill" class="meter-fill meter-special"></div>
+                </div>
               </div>
             </div>
           </section>

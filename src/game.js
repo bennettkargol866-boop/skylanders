@@ -21,6 +21,83 @@ const WORLD_Y = 1.1;
 const SAVE_KEY = "skylanders_arena_save_v4";
 const LEGACY_SAVE_KEY = "skylanders_arena_save_v3";
 const SAVE_SLOT_IDS = Object.freeze(["slot-1", "slot-2", "slot-3"]);
+const HEALING_ITEMS_PER_LEVEL = 3;
+const HEALING_ITEM_AMOUNT = 22;
+const MAP_DETAILS = Object.freeze({
+  "crystal-caverns": {
+    element: "Magic",
+    terrain: "Crystal mines",
+    poi: "Cavern Portal",
+    icon: "✦",
+  },
+  "volcano-valley": {
+    element: "Fire",
+    terrain: "Lava railway",
+    poi: "Magma Lock",
+    icon: "▲",
+  },
+  "sky-pirate-fortress": {
+    element: "Air",
+    terrain: "Floating decks",
+    poi: "Sky Docks",
+    icon: "◆",
+  },
+  "haunted-clocktower": {
+    element: "Undead",
+    terrain: "Clock ruins",
+    poi: "Time Gate",
+    icon: "☾",
+  },
+  "frozen-fang-tundra": {
+    element: "Water",
+    terrain: "Ice citadel",
+    poi: "Aurora Portal",
+    icon: "⬢",
+  },
+});
+const ISLAND_MAP_DETAILS = Object.freeze({
+  "crystal-caverns": {
+    displayLabel: "Island Fundamental",
+    element: "Magic",
+    terrain: "Starter island",
+    poi: "Training Portal",
+    icon: "I",
+    purpose: "Learn movement, jumping, combat, object interaction, and safe exploration.",
+    features: "Breakable crates, hidden items, gems, treasure chests, gates, tutorial route.",
+  },
+  "volcano-valley": {
+    element: "Fire",
+    terrain: "Lava railway island",
+    poi: "Magma Lock",
+    icon: "F",
+    purpose: "Practice hazard timing and tougher arena fights after the starter island.",
+    features: "Lava paths, enemy ambushes, fire gates, treasure pockets.",
+  },
+  "sky-pirate-fortress": {
+    element: "Air",
+    terrain: "Floating deck island",
+    poi: "Sky Docks",
+    icon: "A",
+    purpose: "Navigate connected platforms while learning route planning between islands.",
+    features: "Air bridges, pirate docks, locked paths, sky treasure.",
+  },
+  "haunted-clocktower": {
+    element: "Undead",
+    terrain: "Clocktower island",
+    poi: "Time Gate",
+    icon: "U",
+    purpose: "Use combat strategy around tighter paths and dangerous objective zones.",
+    features: "Haunted halls, time locks, hidden rewards, danger markers.",
+  },
+  "frozen-fang-tundra": {
+    element: "Water",
+    terrain: "Frozen island",
+    poi: "Aurora Portal",
+    icon: "W",
+    purpose: "Finish the island chain with final combat, portals, and full-route mastery.",
+    features: "Ice bridges, frost gates, final portal, high-value treasure.",
+  },
+});
 const GOOFY_MUSIC_BPM = 132;
 const GOOFY_MELODY = Object.freeze([
   { note: "C5", beats: 0.5 },
@@ -153,6 +230,7 @@ export class Game {
     this.renderer.setSize(VIEWPORT.width, VIEWPORT.height, false);
 
     this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color("#52c8f5");
     this.camera = new THREE.PerspectiveCamera(50, VIEWPORT.width / VIEWPORT.height, 0.1, 220);
     this.camera.position.set(0, 24, 28);
     this.cameraTarget = new THREE.Vector3();
@@ -217,6 +295,7 @@ export class Game {
     this.pulses = [];
     this.projectiles = [];
     this.coinPickups = [];
+    this.healingPickups = [];
     this.enemyMeshes = new Map();
     this.enemyTelegraphs = new Map();
     this.pendingButtonAction = null;
@@ -660,6 +739,7 @@ export class Game {
     this.saveProgress();
     this.resetAreaState();
     this.buildLevelScene();
+    this.spawnHealingItems();
     this.spawnPlayerVisual();
     this.spawnFrontWave();
 
@@ -687,6 +767,7 @@ export class Game {
     this.pulses = [];
     this.projectiles = [];
     this.coinPickups = [];
+    this.healingPickups = [];
     this.enemyMeshes.clear();
     this.enemyTelegraphs.clear();
     this.clearGroup(this.levelGroup);
@@ -871,11 +952,13 @@ export class Game {
 
     this.showOverlayFrame({
       kicker: "Realm Select",
-      title: "Choose a Level",
-      text: "Pick an unlocked realm first, then choose which hero you want to bring into it.",
+      title: "Skylands Map",
+      text: "Start on Island Fundamental to learn movement, jumping, combat, objects, collectibles, gates, and portals before traveling to tougher islands.",
       meta: [
         { label: "Save File", value: this.activeSlotId.replace("slot-", "File ") },
         { label: "Unlocked Levels", value: `${unlockedLevelCount} / ${TOTAL_AREAS}` },
+        { label: "Starter Island", value: "Island Fundamental" },
+        { label: "Map Keys", value: "Terrain, Element, POI" },
       ],
       backLabel: "Back",
       backAction: () => this.showMainMenu(),
@@ -884,11 +967,24 @@ export class Game {
     const levels = [];
     for (let index = 0; index < TOTAL_AREAS; index += 1) {
       const level = getAreaConfig(index);
+      const mapDetails = ISLAND_MAP_DETAILS[level.id] ?? {
+        element: "Neutral",
+        terrain: level.theme.backdropSurfaceType ?? "Realm",
+        poi: "Portal",
+        icon: "•",
+      };
       const unlocked = index < unlockedLevelCount;
       levels.push({
         label: level.label,
-        meta: unlocked ? `Level ${index + 1}` : "Locked",
+        meta: unlocked ? `Zone ${index + 1}` : "Locked",
         description: level.description,
+        element: mapDetails.element,
+        terrain: mapDetails.terrain,
+        poi: mapDetails.poi,
+        icon: mapDetails.icon,
+        completed: index < this.progress.bestArea,
+        current: unlocked && index === unlockedLevelCount - 1,
+        routeLabel: index < TOTAL_AREAS - 1 ? "Route open" : "Final portal",
         selected: index === this.selectedLevelIndex,
         locked: !unlocked,
         onClick: () => {
@@ -1158,6 +1254,7 @@ export class Game {
     }
 
     this.updateCoinPickups(dt);
+    this.updateHealingPickups(dt);
 
     if (!this.hasKey && distanceBetween(this.player, this.currentLevel.layout.key) < 2.4) {
       this.collectKey();
@@ -1352,6 +1449,93 @@ export class Game {
         this.currentStatusText = `Collected ${coin.value} coins. Total: ${this.progress.coins}.`;
         this.saveProgress();
         this.effectsGroup.remove(coin.mesh);
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  spawnHealingItems() {
+    const positions = this.getHealingItemPositions();
+
+    for (let index = 0; index < HEALING_ITEMS_PER_LEVEL; index += 1) {
+      const position = positions[index];
+      const pickup = {
+        id: `heal-${this.areaIndex}-${index}`,
+        x: position.x,
+        z: position.z,
+        amount: HEALING_ITEM_AMOUNT,
+        phase: index * 1.3,
+      };
+      pickup.mesh = this.createHealingItemMesh();
+      pickup.mesh.position.set(pickup.x, WORLD_Y + 0.95, pickup.z);
+      this.effectsGroup.add(pickup.mesh);
+      this.healingPickups.push(pickup);
+    }
+  }
+
+  getHealingItemPositions() {
+    const { layout } = this.currentLevel;
+    const safePoint = (rect, offsetX = 0, offsetZ = 0) =>
+      this.clampPointToRect((rect.minX + rect.maxX) / 2 + offsetX, (rect.minZ + rect.maxZ) / 2 + offsetZ, rect, 1.2);
+
+    return [
+      safePoint(layout.frontZones[1] ?? layout.frontZones[0], 0, 0),
+      safePoint(layout.frontZones[layout.frontZones.length - 1], 0, 0),
+      safePoint(layout.backZones[1] ?? layout.backZones[0], 0, 0),
+    ];
+  }
+
+  createHealingItemMesh() {
+    const group = new THREE.Group();
+    const glowMat = makeMaterial("#74ff9f", {
+      emissive: "#37ff7b",
+      emissiveIntensity: 0.46,
+      transparent: true,
+      opacity: 0.92,
+    });
+    const coreMat = makeMaterial("#f7fff8", {
+      emissive: "#9affb8",
+      emissiveIntensity: 0.18,
+    });
+
+    const halo = createCylinder(0.58, 0.58, 0.08, glowMat, 20);
+    halo.rotation.x = Math.PI / 2;
+    halo.position.y = 0.02;
+    group.add(halo);
+
+    const vertical = createBox(0.28, 0.96, 0.24, coreMat);
+    vertical.position.y = 0.04;
+    group.add(vertical);
+
+    const horizontal = createBox(0.92, 0.28, 0.24, coreMat);
+    horizontal.position.y = 0.04;
+    group.add(horizontal);
+
+    const base = createSphere(0.18, glowMat, 12, 8);
+    base.position.y = -0.42;
+    group.add(base);
+
+    return group;
+  }
+
+  updateHealingPickups(dt) {
+    if (!this.healingPickups.length || !this.player) {
+      return;
+    }
+
+    this.healingPickups = this.healingPickups.filter((pickup) => {
+      pickup.phase += dt * 3.6;
+      pickup.mesh.rotation.y += dt * 2.8;
+      pickup.mesh.position.y = WORLD_Y + 1 + Math.sin(pickup.phase) * 0.18;
+
+      if (distanceBetween(this.player, pickup) < 1.8 && this.player.health < this.player.maxHealth) {
+        const before = this.player.health;
+        this.player.heal(pickup.amount);
+        const healed = Math.ceil(this.player.health - before);
+        this.currentStatusText = `Healing item restored ${healed} health.`;
+        this.effectsGroup.remove(pickup.mesh);
         return false;
       }
 
@@ -3770,19 +3954,34 @@ export function populateSaveSlotButtons(container, items) {
 }
 
 export function populateLevelButtons(container, items) {
-  populateInfoButtons(
-    container,
-    items.map((item) => ({
-      label: item.label,
-      meta: item.meta,
-      description: item.description,
-      selected: item.selected,
-      locked: item.locked,
-      disabled: item.locked,
-      onClick: item.onClick,
-    })),
-    "level-button"
-  );
+  container.innerHTML = "";
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `level-button map-node${item.locked ? " is-locked" : ""}${
+      item.selected ? " is-selected" : ""
+    }${item.completed ? " is-completed" : ""}${item.current ? " is-current" : ""}`;
+    button.disabled = Boolean(item.locked);
+    button.innerHTML = `
+      <span class="map-node-route">${item.routeLabel ?? ""}</span>
+      <span class="map-node-icon" aria-hidden="true">${item.icon ?? "•"}</span>
+      <span class="character-meta">${item.meta ?? ""}</span>
+      <strong>${item.label}</strong>
+      <span class="map-node-description">${item.description ?? ""}</span>
+      <span class="map-node-tags">
+        <span>${item.terrain ?? "Realm"}</span>
+        <span>${item.element ?? "Neutral"} Zone</span>
+        <span>${item.poi ?? "Portal"}</span>
+      </span>
+    `;
+    button.addEventListener("click", () => {
+      if (!item.locked) {
+        item.onClick?.();
+      }
+    });
+    container.appendChild(button);
+  }
 }
 
 export function populateCharacterButtons(container, options) {
